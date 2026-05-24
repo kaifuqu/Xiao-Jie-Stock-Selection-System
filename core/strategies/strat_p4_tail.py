@@ -9,7 +9,7 @@
 # Standard library
 from datetime import datetime, timezone, timedelta
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 # Third-party
 import numpy as np
