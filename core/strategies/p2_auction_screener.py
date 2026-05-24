@@ -536,9 +536,12 @@ def p2_global_risk_veto(
     if circ_mv < cfg.circ_mv_min_wan:
         return False, f"流通市值过小 circ_mv={circ_mv:.0f}万 < {cfg.circ_mv_min_wan:.0f}万"
 
+    open_px = _safe_float(rt.get("open"), 0.0)
+    pre_close = _safe_float(rt.get("pre_close"), _safe_float(y.get("close"), 0.0))
+    auc_pct = _auction_pct_vs_preclose(open_px, pre_close)
+
     ma60 = _safe_float(y.get("ma60"), 0.0)
     y_close = _safe_float(y.get("close"), 0.0)
-    open_px = _safe_float(rt.get("open"), 0.0)
     price_ref = open_px if open_px > 0 else _safe_float(rt.get("price"), y_close)
     if ma60 > 0 and y_close > 0 and y_close <= ma60:
         return False, "左侧/下行: 昨收 close <= ma60"
