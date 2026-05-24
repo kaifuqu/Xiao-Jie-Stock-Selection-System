@@ -1636,7 +1636,7 @@ def execute_scan(target_pool_list):
                 
                 # 【性能优化】P0 自选股也先从 DuckDB 获取名称
                 my_bar.progress(0.1, text="🌐 检查自选股名称...")
-                
+
                 # 【V26.6 优化】优先从本地 JSON 文件读取名称，完全零 API 调用
                 db_name_map = {}
                 local_names_loaded = False
@@ -1648,36 +1648,28 @@ def execute_scan(target_pool_list):
                         import json as _json
                         with open(stock_names_json, "r", encoding="utf-8") as _f:
                             _local_map = _json.load(_f)
+                        # JSON key 为完整 ts_code（如 000001.SZ），直接用 ts_code 查找
+                        # 如果 target_code 不带后缀，尝试补全 .SH/.SZ 再查
+                        _suffix_map = {".SH": "SH", ".SZ": "SZ"}
                         for tc in target_codes:
-                            code_part = tc.split('.')[0][:6] if '.' in tc else tc[:6]
-                            if code_part in _local_map:
-                                db_name_map[code_part] = _local_map[code_part]
+                            name = _local_map.get(tc)
+                            if not name:
+                                code6 = tc.split('.')[0][:6] if '.' in tc else tc[:6]
+                                for suf, suffix in _suffix_map.items():
+                                    name = _local_map.get(f"{code6}.{suffix}")
+                                    if name:
+                                        break
+                            if name:
+                                db_name_map[tc.split('.')[0][:6]] = name
                         local_names_loaded = True
                         logging.debug("从 stock_names.json 加载 %s 只名称", len(db_name_map))
                 except Exception:
                     pass
 
-                # DuckDB 补充（JSON 已覆盖绝大部分，DB 中可能有 JSON 之后新增的股票）
-                if not local_names_loaded:
-                    try:
-                        from data.db_core import get_read_conn
-                        placeholders = ",".join(["?"] * len(target_codes))
-                        with get_read_conn(read_only=True) as con:
-                            name_rows = con.execute(
-                                f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
-                                target_codes
-                            ).fetchall()
-                            for row in name_rows:
-                                if row and len(row) >= 2 and row[1]:
-                                    code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
-                                    if code_part not in db_name_map:
-                                        db_name_map[code_part] = row[1]
-                    except Exception:
-                        pass
-
+                # DuckDB 查询已无意义（daily_data 无 name 列），直接跳过；
+                # 仅在 JSON 完全为空时调用 API兜底（全新环境首次使用）
                 missing_codes = [c for c in target_codes if c.split('.')[0][:6] not in db_name_map]
                 rt_map = {}
-                # 【V26.6 优化】只有在 JSON 和 DB 都没有名称时，才调用实时 API（通常极少）
                 if missing_codes:
                     my_bar.progress(0.1, text=f"🌐 同步缺失名称 ({len(missing_codes)} 只)...")
                     rt_map = fetch_realtime_batch(missing_codes)
@@ -1756,38 +1748,27 @@ def execute_scan(target_pool_list):
                         import json as _json
                         with open(stock_names_json, "r", encoding="utf-8") as _f:
                             _local_map = _json.load(_f)
+                        # JSON key 为完整 ts_code（如 000001.SZ），直接用 ts_code 查找
+                        _suffix_map = {".SH": "SH", ".SZ": "SZ"}
                         for tc in target_codes:
-                            code_part = tc.split('.')[0][:6] if '.' in tc else tc[:6]
-                            if code_part in _local_map:
-                                db_name_map[code_part] = _local_map[code_part]
+                            name = _local_map.get(tc)
+                            if not name:
+                                code6 = tc.split('.')[0][:6] if '.' in tc else tc[:6]
+                                for suf, suffix in _suffix_map.items():
+                                    name = _local_map.get(f"{code6}.{suffix}")
+                                    if name:
+                                        break
+                            if name:
+                                db_name_map[tc.split('.')[0][:6]] = name
                         local_names_loaded = True
                         logging.debug("从 stock_names.json 加载 %s 只名称", len(db_name_map))
                 except Exception:
                     pass
 
-                # DuckDB 补充（JSON 已覆盖绝大部分，DB 中可能有 JSON 之后新增的股票）
-                if not local_names_loaded:
-                    try:
-                        from data.db_core import get_read_conn
-                        placeholders = ",".join(["?"] * len(target_codes))
-                        with get_read_conn(read_only=True) as con:
-                            name_rows = con.execute(
-                                f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
-                                target_codes
-                            ).fetchall()
-                            for row in name_rows:
-                                if row and len(row) >= 2 and row[1]:
-                                    code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
-                                    if code_part not in db_name_map:
-                                        db_name_map[code_part] = row[1]
-                    except Exception:
-                        pass
-
-                # 找出名称缺失的股票
+                # DuckDB 查询已无意义（daily_data 无 name 列），直接跳过
                 missing_codes = [c for c in target_codes if c.split('.')[0][:6] not in db_name_map]
 
                 rt_map = {}
-                # 【V26.6 优化】只有在 JSON 和 DB 都没有名称时，才调用实时 API（通常极少）
                 if missing_codes:
                     my_bar.progress(0.05, text=f"🌐 同步缺失名称 ({len(missing_codes)} 只)...")
                     rt_map = fetch_realtime_batch(missing_codes)
