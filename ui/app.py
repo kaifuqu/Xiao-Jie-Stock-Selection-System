@@ -2154,64 +2154,64 @@ else:
             code = item.get('code', '')
             s_code = str(code).split('.')[0][:6]
             name = normalize_stock_display_name(hist.get("name", s_code))
-        
-        db_close_p = _safe_float(hist.get('close', 0.0), 0.0)
-        # 与 scan_engine 一致：日线 pre_close → close，禁止默认 1 元伪造涨跌幅
-        pre_c = _safe_float(hist.get('pre_close'), 0.0)
-        if pre_c <= 0:
-            pre_c = _safe_float(hist.get('close'), 0.0)
-        pct = (db_close_p - pre_c) / pre_c * 100.0 if pre_c > 0 else 0.0
-        cyq = _safe_float(hist.get('cyq_concentration', 0.0), 0.0)
-        vr_val, vr_tag = _p1_display_vol_ratio(hist, item)
-        # 推算量比写回 hist：刷新页面即可在会话内持久为有效列值，下次展示走直读(H)
-        if isinstance(item.get("hist"), dict) and vr_tag in ("C", "D"):
-            item["hist"]["vol_ratio"] = float(vr_val)
-        
-        circ_mv_raw = hist.get('circ_mv')
-        if pd.isna(circ_mv_raw) or circ_mv_raw is None:
-            circ_mv_raw = hist.get('total_mv', 0) * 0.6
-        circ_mv_yi = float(circ_mv_raw) / 10000.0
 
-        if circ_mv_yi >= 1000.0:
-            size_emoji, size_label = "🦍", "巨无霸"
-        elif circ_mv_yi >= 500.0:
-            size_emoji, size_label = "🐘", "超级中军"
-        elif circ_mv_yi >= 100.0:
-            size_emoji, size_label = "🐎", "核心中盘"
-        else:
-            size_emoji, size_label = "🐥", "袖珍盘"
+            db_close_p = _safe_float(hist.get('close', 0.0), 0.0)
+            # 与 scan_engine 一致：日线 pre_close → close，禁止默认 1 元伪造涨跌幅
+            pre_c = _safe_float(hist.get('pre_close'), 0.0)
+            if pre_c <= 0:
+                pre_c = _safe_float(hist.get('close'), 0.0)
+            pct = (db_close_p - pre_c) / pre_c * 100.0 if pre_c > 0 else 0.0
+            cyq = _safe_float(hist.get('cyq_concentration', 0.0), 0.0)
+            vr_val, vr_tag = _p1_display_vol_ratio(hist, item)
+            # 推算量比写回 hist：刷新页面即可在会话内持久为有效列值，下次展示走直读(H)
+            if isinstance(item.get("hist"), dict) and vr_tag in ("C", "D"):
+                item["hist"]["vol_ratio"] = float(vr_val)
 
-        name_with_emoji = f"{size_emoji} {name}"
+            circ_mv_raw = hist.get('circ_mv')
+            if pd.isna(circ_mv_raw) or circ_mv_raw is None:
+                circ_mv_raw = hist.get('total_mv', 0) * 0.6
+            circ_mv_yi = float(circ_mv_raw) / 10000.0
 
-        pos_advice = "🛡️常规: 15-20%"
-        if curr_regime == "主升浪":
-            if size_emoji == "🐎": pos_advice = "🔥主攻: 30-40%"
-            elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️压舱: 15-20%"
-        elif curr_regime == "情绪退潮市":
-            if size_emoji == "🐎": pos_advice = "🛑极危: 0-10% (试探)"
-            elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️重装避险: 30-40%"
-        else:
-            if size_emoji == "🐎": pos_advice = "⚔️游击: 15-20%"
-            elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️均衡: 20-30%"
-            
-        stop_loss = "破20日线" if size_emoji in ["🦍", "🐘"] else "3日未脱离成本"
-        
-        p1_display_data.append({
-            "代码": s_code, 
-            "名称": name_with_emoji, 
-            "综合分": round(item.get('p1_score', 0.0), 2), 
-            "现价": f"{db_close_p:.2f}", 
-            "涨幅": f"{pct:.2f}%",  
-            "量比": f"{vr_val:.1f}({vr_tag})", 
-            "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%", 
-            "行业": _industry_cache.get(s_code, "--"), 
-            "股性": f"{size_emoji}{size_label}", 
-            "建议仓位": pos_advice, 
-            "纪律防线": stop_loss,
-            "集中度": f"{cyq:.1f}" if cyq > 0 else "--",
-            "战法": base_strategy,
-            "缩量说明": _p1_shrink_col_txt,
-        })
+            if circ_mv_yi >= 1000.0:
+                size_emoji, size_label = "🦍", "巨无霸"
+            elif circ_mv_yi >= 500.0:
+                size_emoji, size_label = "🐘", "超级中军"
+            elif circ_mv_yi >= 100.0:
+                size_emoji, size_label = "🐎", "核心中盘"
+            else:
+                size_emoji, size_label = "🐥", "袖珍盘"
+
+            name_with_emoji = f"{size_emoji} {name}"
+
+            pos_advice = "🛡️常规: 15-20%"
+            if curr_regime == "主升浪":
+                if size_emoji == "🐎": pos_advice = "🔥主攻: 30-40%"
+                elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️压舱: 15-20%"
+            elif curr_regime == "情绪退潮市":
+                if size_emoji == "🐎": pos_advice = "🛑极危: 0-10% (试探)"
+                elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️重装避险: 30-40%"
+            else:
+                if size_emoji == "🐎": pos_advice = "⚔️游击: 15-20%"
+                elif size_emoji in ["🦍", "🐘"]: pos_advice = "🛡️均衡: 20-30%"
+
+            stop_loss = "破20日线" if size_emoji in ["🦍", "🐘"] else "3日未脱离成本"
+
+            p1_display_data.append({
+                "代码": s_code,
+                "名称": name_with_emoji,
+                "综合分": round(item.get('p1_score', 0.0), 2),
+                "现价": f"{db_close_p:.2f}",
+                "涨幅": f"{pct:.2f}%",
+                "量比": f"{vr_val:.1f}({vr_tag})",
+                "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%",
+                "行业": _industry_cache.get(s_code, "--"),
+                "股性": f"{size_emoji}{size_label}",
+                "建议仓位": pos_advice,
+                "纪律防线": stop_loss,
+                "集中度": f"{cyq:.1f}" if cyq > 0 else "--",
+                "战法": base_strategy,
+                "缩量说明": _p1_shrink_col_txt,
+            })
 
 # 【多层级池子】说明：在「主池+观察池」模式下追加 P1 震荡观察底仓行（与主池分列展示、琥珀色由表格高亮）
 if st.session_state.get("pool_view_mode") == "main_plus_obs":
