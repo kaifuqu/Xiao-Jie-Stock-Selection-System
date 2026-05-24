@@ -2778,9 +2778,11 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                     # VWAP = 成交额(元) / 成交量(股) — 注意amount单位与volume单位匹配
                     # amount从东财接口获取，单位为元；volume单位为股
                     vwap_avg_price = rt_amount / vol_shares
+                    rt['vwap'] = vwap_avg_price  # 供 P3/P4 screener 的 rt.get('vwap') 直接读取
                     calc_price = vwap_avg_price
                 else:
-                    calc_price = now_price if now_price > 0 else _safe_float(hist.get('close', 10), default=10.0)
+                    rt['vwap'] = now_price if now_price > 0 else _safe_float(hist.get('close', 10), default=10.0)
+                    calc_price = rt['vwap']
                 # 【审计修复】维度2：用价作分母时兜底，避免 circ/price 异常
                 _cp = max(calc_price, 1e-9)
                 float_shares_wan = circ_mv_wan / _cp

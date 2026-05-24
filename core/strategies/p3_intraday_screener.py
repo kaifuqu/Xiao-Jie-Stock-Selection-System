@@ -446,9 +446,9 @@ def _p3_mainline_score(rt: Dict[str, Any], y: pd.Series) -> Tuple[float, str]:
     board_beta = _safe_float(rt.get("sector_beta", rt.get("industry_beta", rt.get("sector_mult", 1.0))), 1.0)
     vr = _safe_float(rt.get("vol_ratio"), _safe_float(y.get("vol_ratio"), 0.0))
     now_px = _safe_float(rt.get("price"), 0.0)
-    vwap = _safe_float(rt.get("vwap"), now_px)
-    pct_chg = 0.0
     pre_close = _safe_float(rt.get("pre_close"), _safe_float(y.get("close"), 0.0))
+    vwap = _safe_float(rt.get("vwap"), pre_close)  # 无rt原生vwap时fallback昨收（非现价，防假VWAP站稳）
+    pct_chg = 0.0
     if now_px > 0 and pre_close > 0:
         pct_chg = (now_px - pre_close) / pre_close * 100.0
 

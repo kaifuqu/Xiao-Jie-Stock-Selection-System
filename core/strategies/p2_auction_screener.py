@@ -302,19 +302,29 @@ def _open_confirm_window(rt: Dict[str, Any], cfg: P2ScreenerConfig) -> bool:
     return int(cfg.open_confirm_minute_low) <= mi <= int(cfg.open_confirm_minute_high)
 
 
-def _estimate_vwap_from_rt(rt: Dict[str, Any], ref_price: float) -> float:
+def _estimate_vwap_from_rt(rt: Dict[str, Any], ref_price: float, fallback_price: float = 0.0) -> float:
+    """
+    【V26.7 安全升级】盘中VWAP估算。
+    量纲：东财amount=元，volume=股 → tentative=元/股 = 正确VWAP。
+    若偏离ref_price超过20% → 尝试把手→股修正 → 仍不合理则降级fallback。
+    """
     amt = _safe_float(rt.get("amount"), 0.0)
     vol = _safe_float(rt.get("volume"), 0.0)
     if amt <= 0 or vol <= 0:
-        return 0.0
+        return fallback_price
     tentative = amt / max(vol, 1e-9)
-    if tentative > ref_price * 20.0:
-        return amt / max(vol * 100.0, 1e-9)
+    # 20%相对偏差校验（替代旧版 > price*20 的绝对判断，更稳健）
+    if ref_price > 0 and abs(tentative - ref_price) / ref_price > 0.20:
+        vol_as_hand = vol * 100.0
+        corrected = amt / max(vol_as_hand, 1e-9)
+        if abs(corrected - ref_price) / ref_price <= 0.20:
+            return corrected
+        return fallback_price
     return tentative
 
 
 def _open_vwap_support_ok(rt: Dict[str, Any], now_px: float, cfg: P2ScreenerConfig) -> bool:
-    vw = _estimate_vwap_from_rt(rt, now_px)
+    vw = _estimate_vwap_from_rt(rt, now_px, fallback_price=now_px)
     if vw <= 0 or now_px <= 0:
         return True
     return now_px >= vw * (1.0 - cfg.open_confirm_vwap_eps)
@@ -976,7 +986,7 @@ def evaluate_p2_screener(
     t1_avg, t1_win, t1_n = _p2_collect_t1_memory(rt)
     t1_memory_score = _p2_t1_memory_score(t1_avg, t1_win, t1_n, cfg)
     open_confirm_hit = _open_confirm_window(rt, cfg) and _open_vwap_support_ok(rt, now_px, cfg)
-    vwap_px = _estimate_vwap_from_rt(rt, now_px)
+    vwap_px = _estimate_vwap_from_rt(rt, now_px, fallback_price=now_px)
     vwap_gap_pct = ((now_px - vwap_px) / vwap_px * 100.0) if vwap_px > 0 and now_px > 0 else 0.0
 
     # 序号 P2-01～P2-04：与产品文档/配置常量命名对齐，便于检索与复盘
