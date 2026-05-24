@@ -142,7 +142,7 @@ def _ui_cached_distinct_ts_codes_latest_trade_date() -> tuple[str, ...]:
 
 
 st.set_page_config(
-    page_title=f"小杰AI选股系统 Pro V26.6 {constants.APP_VERSION}",
+    page_title="小杰AI选股系统 Pro V26.6",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
