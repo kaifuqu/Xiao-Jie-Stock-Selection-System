@@ -1,0 +1,4 @@
+# 仅 auto_sniper_daemon.py 24h 守护进程额外依赖（与 Streamlit 主程序分离安装亦可）
+schedule>=1.2.0
+requests>=2.28.0
+filelock>=3.13.0

@@ -1,0 +1,650 @@
+# ==========================================
+# 小杰AI选股系统 Pro V26.2（机构实战·防弹版）— 与 constants.APP_VERSION 一致
+# 市值口径（与 constants.py / data_fetcher 一致）：
+#   · 下载门槛：总市值 total_mv 或流通市值 circ_mv 任一侧 ≥100 亿（万元阈值 DAILY_BASIC_MIN_MV_WAN=1_000_000），P0 自选代码豁免。
+#   · 参与门槛：流通市值 circ_mv ≥100 亿（P1_SELECT_MIN_CIRC_MV_WAN=1_000_000）；如需放宽可用本文件 strategies.p1.select_min_circ_mv_wan 覆盖。
+#   · P2/P3/P4/P5 等战法条目的 circ_mv_min_wan 见下文 strategies.*；原则上继续沿用“参与门槛=流通市值”口径。
+# 引入 10000 积分特色数据：筹码/北向/两融
+# ==========================================
+
+tushare:
+  token: ""  # ← 请通过 .env 文件设置 TUSHARE_TOKEN，首次运行系统会自动引导
+  # token：Tushare 接口密钥（不是 URL）。custom_endpoint 留空 = 官方直连 api.waditu.com，无需也不走 HTTP 代理。
+  # 仅当运行环境无法解析官方域名（如 getaddrinfo 失败）时，再按需填写 Tushare 提供的专线 base URL（那是接口网关地址，不是系统代理）。
+  custom_endpoint: ""
+  # 若系统/终端设置了 HTTP_PROXY=127.0.0.1:7897 而本机代理未开，Tushare 会读超时；data_fetcher.retry_api 会自动尝试一次直连。
+  # 长期建议：能直连公网则清空 HTTP_PROXY/HTTPS_PROXY，或保持 Clash「系统代理」开启。
+
+download:
+  skip_moneyflow: false
+  # 老机器/磁盘慢时可将 150 改为 90（减轻晚间增量与 DuckDB 写入压力）
+  max_days_per_run: 150
+
+database:
+  # 实际文件始终在「本项目根目录/data/」下；file 仅指定文件名，勿写盘符路径
+  file: quant_data.duckdb
+
+# 【企微推送网关】与侧边栏「企微实盘预警」叠加：enabled 且勾选且 URL 非空才异步推送
+notification:
+  enabled: true
+  # 原地址：仅用于 p1~p5 选股推送 + 每天 9:18 固定消息
+  wechat_webhook_url: ""  # ← 请通过 .env 文件设置 WEIXIN_WEBHOOK_URL
+  # 新地址：用于维护、下载、报错、任务执行结果等全部其他系统消息
+  wechat_webhook_url_secondary: ""  # ← 请通过 .env 文件设置
+
+# DeepSeek 分析建议：仅追加到 P2/P3/P4/P5 个股企微推送末尾；失败时不影响原推送
+# API Key 通过 .env 或环境变量 DEEPSEEK_API_KEY 配置，不写入本文件。
+deepseek_analysis:
+  enabled: true
+  api_key: ""  # ← 请通过 .env 文件设置 DEEPSEEK_API_KEY，首次运行系统会自动引导
+  base_url: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+  thinking_enabled: true
+  reasoning_effort: "high"
+  timeout_seconds: 45
+  max_tokens: 8000
+
+# 守护进程告警静默规则：匹配 title/detail 任一命中则只记日志，不推企微/系统提示
+# silence_keywords 为包含匹配；blacklist_categories 为精确类别匹配
+# whitelist_keywords 命中时优先放行（即使其它静默规则命中）
+daemon_alert_silence:
+  enabled: true
+  whitelist_keywords: []
+  blacklist_categories: []
+  silence_keywords:
+    - "数据库体积异常放大"
+    - "重铸后仍显著放大"
+    - "未分类异常（请查看 data/runtime/sniper.log 末条栈追踪）"
+
+notify:
+  wechat_webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=3611f6d0-2a7d-4b08-9d24-c69aeee01190"
+
+# 历史字段：原 sync_daemon 已移除；晚间 19:05 增量、19:15 P1、19:30 P5 以 auto_sniper_daemon 为准。
+server:
+  auto_update_time: "19:05"
+  # 守护进程资源档：standard=P3/P4 每 150s + 异步队列约 10s（12G 内存可放心用）；low=P3/P4 每 150s + 异步 15s（更省 CPU）
+  daemon_profile: "standard"
+  # 可选显式覆盖（整数；注释掉则完全按 profile）
+  # daemon_p3_poll_interval_seconds: 150
+  # daemon_async_queue_poll_seconds: 20
+  # 兼容旧字段（分钟制；若保留则会自动换算为秒）
+  # daemon_p3_poll_interval_minutes: 2
+
+# ---------------------------------------------------------------------------
+# P3/P4 异步扫描队列（pending.json）：生产环境由 auto_sniper_daemon 独占消费锁并轮询；
+# 与 Streamlit 内嵌 ScanAsyncWorker 二选一（filelock），避免双进程抢队列。
+# ---------------------------------------------------------------------------
+# embed_worker_in_streamlit:
+#   true  — 仅启动 Streamlit、无守护进程时（进程内 ScanAsyncWorker 消费队列）。
+#   false — 强制不嵌入（推荐与 start_server 二进程部署一致）。
+#   auto  — 若另一进程已持有 pending_queue_consumer.filelock → 不嵌入 UI。
+# 环境变量 XIAOJIE_EMBED_UI_SCAN_WORKER（1/0/true/false/auto）优先于本配置。
+scan_async:
+  embed_worker_in_streamlit: false
+
+# ---------------------------------------------------------------------------
+# 双轨行情雷达（Regime）：主/副状态阈值与日线统计 SQL 净化参数
+# 修改后随进程重载；与 core/regime_analyzer.py 对齐。
+# ---------------------------------------------------------------------------
+regime:
+  lookback_days: 20
+  primary_window_days: 10
+  min_sample_days: 5
+  primary:
+    trend_up_ratio: 0.52
+    trend_down_ratio: 0.42
+  secondary:
+    climax_up_ratio: 0.65
+    climax_avg_pct_chg: 1.0
+    freeze_up_ratio: 0.35
+    freeze_avg_pct_chg: -1.0
+    rebound_delta: 0.1
+  sql_filter:
+    max_abs_pct_chg: 30.0
+    min_vol: 0.0
+    # 常见指数/基准在 daily_data 中若存在则排除；可按本地库实际再增删
+    exclude_index_ts_codes:
+      - "000001.SH"
+      - "399001.SZ"
+      - "399006.SZ"
+      - "000300.SH"
+
+backtest:
+  hold_days: 5            
+
+strict_mode:
+  p2_auction_vr: 1.2      
+  p3_intraday_vr: 1.45    
+  # P4 尾盘阈值：用于尾盘战法门槛（与 P4 150s 轮询、14:31–14:55 优先窗配套）
+  p4_tail_vr: 1.75        
+  min_turnover_f: 1.8     
+
+penalty_rules:
+  max_score_cap: 200         
+  min_pass_score: 85         
+  penalty_multipliers:
+    afternoon_sneak: 0.7     
+    early_afternoon: 0.85    
+    high_amplitude: 0.8      
+
+# ---------------------------------------------------------------------------
+# 风险控制全局配置：与 core/strategies/risk_control_engine.RiskControlConfig 对齐
+# 修改保存后，下次引擎读盘（config.yaml mtime 变化）或每轮 run_all 刷新时生效（未外部注入 risk_cfg 时）。
+# ---------------------------------------------------------------------------
+risk_control:
+  # true: 纯 UI 预警模式——一层/二层红线仅打 ⚠️[预警] 标签，不拦截 P2–P5 战法命中（极端行情可快速放宽）。
+  # false: 旧版硬否决——触碰红线即不出票（与引擎内 pass_layer1/pass_layer2 一致）。
+  ui_alert_only: true
+
+# ==================== 战法打分引擎 (UI 颜色判断基准) ====================
+strategy_scores:
+  # --- 👑 顶级左侧送分题 (L1-L8 矩阵：95分以上特权) ---
+  "L1_极端情绪错杀": 99
+  "L4_MACD底背离抢筹": 98
+  "L2_VWAP极度乖离": 97
+  "L6_三连阴缩量冰点": 97
+  "L5_低位极度背离": 96
+  "L7_大阴线假摔": 96
+  "L3_均线深海探针": 95
+  "L8_布林下轨防守": 95
+  
+  # --- ⚔️ 经典右侧主升浪 ---
+  "82_尾盘强势加速(微结构顶级)": 99  
+  "84_尾盘突破回踩": 95
+  "82_尾盘强势加速": 94
+  "龙回头": 93
+  "横盘爆量突破": 92       
+  "58_龙头首板(行业最强)": 92
+  "三阴不破阳": 91
+  "二进三": 90
+  "92_RSI极值抄底": 89      
+  "02_黄金缺口": 89
+  "81_地量尾盘洗盘": 88
+  "90_低位放量抢筹": 88      
+  "北向/主力突增": 87
+  "涨停基因": 86
+  "91_强势阴线回踩": 86      
+  "80_龙腾尾盘": 85   
+  "底部启动确认": 85
+  "83_尾盘均价回踩": 84
+  "60_旱地拔葱": 83
+  "MACD底背离": 81
+  "45_回马一枪": 80
+  "58_龙头首板": 78
+  "59_强势接力(一进二)": 78
+  "30_朱雀突破": 75
+  "01_一进二": 73     
+  "29_量比异动": 72
+  "P3_背离低吸": 71
+  "杯柄形态": 70
+  
+  # --- 🚀 10000积分特色机构底牌战法 (P4主战场：保持高分绝杀) ---
+  "99_筹码护盘收官": 95
+  "96_筹码单峰突破": 95
+  "95_北向隔夜抢跑": 94
+  "100_北向尾盘抢筹": 94
+  "101_杠杆冰点左侧": 93
+  "94_两融错杀反核": 92
+
+  # --- 👑 P3 圣杯模式：昨日底牌 + 今日量价共振确认 (突破 135 分，触发尊贵紫) ---
+  "👑[终极共振]外资杠杆双核": 150
+  "👑[终极共振]筹码突击": 145
+  "👑[终极共振]北向回踩": 140
+
+  # --- ⚠️ P3 [T-1底牌] 待确认状态 (仅提示为蓝色/黄色，严禁盘中盲目追高) ---
+  "[T-1底牌]102_外资双核待确认": 115
+  "[T-1底牌]97_筹码单峰待确认": 112
+  "[T-1底牌]98_北向回踩待确认": 110
+
+
+# ==================== 回测沙盘预期胜率 ====================
+strategy_winrate:
+  # --- 👑 顶级左侧送分题 (L1-L8 矩阵) ---
+  "L1_极端情绪错杀": 69.0
+  "L4_MACD底背离抢筹": 68.0
+  "L2_VWAP极度乖离": 66.5
+  "L6_三连阴缩量冰点": 65.0
+  "L7_大阴线假摔": 64.0
+  "L3_均线深海探针": 63.5
+  "L5_低位极度背离": 62.5
+  "L8_布林下轨防守": 61.0
+  
+  # --- ⚔️ 经典右侧主升浪 ---
+  "82_尾盘强势加速(微结构顶级)": 72.0 
+  "82_尾盘强势加速": 68.0
+  "80_龙腾尾盘": 67.0
+  "81_地量尾盘洗盘": 66.0
+  "92_RSI极值抄底": 66.0    
+  "84_尾盘突破回踩": 65.0
+  "90_低位放量抢筹": 65.0    
+  "龙回头": 64.0
+  "45_回马一枪": 64.0
+  "底部启动确认": 64.0
+  "58_龙头首板(行业最强)": 63.0
+  "91_强势阴线回踩": 63.0    
+  "02_黄金缺口": 62.0
+  "60_旱地拔葱": 62.0
+  "北向/主力突增": 61.0
+  "三阴不破阳": 60.0
+  "横盘爆量突破": 60.0   
+  "二进三": 60.0
+  "涨停基因": 60.0
+  
+  # --- 🚀 10000积分特色战法 & 圣杯共振区 (极高胜率区) ---
+  "👑[终极共振]外资杠杆双核": 86.0
+  "👑[终极共振]筹码突击": 85.0
+  "👑[终极共振]北向回踩": 84.0
+  "102_外资杠杆双核共振": 84.0
+  "100_北向尾盘抢筹": 83.0
+  "96_筹码单峰突破": 82.0
+  "99_筹码护盘收官": 80.0
+  "97_筹码单峰突击": 80.0
+  "95_北向隔夜抢跑": 78.0
+  "101_杠杆冰点左侧": 77.0
+  "98_北向共振回踩": 76.0
+  "94_两融错杀反核": 75.0
+
+# =============================================================================
+# strategies: P1–P5 与黄金门禁阈值（原代码硬编码默认值已原样迁入，便于实盘微调）
+# 策略实验室可在会话内覆写；引擎每次扫描前从此处 + 会话合并加载。
+# =============================================================================
+strategies:
+  # ---------- P1 底仓：三档市场环境 profile（与 pool_manager._get_regime_thresholds 逻辑对应）----------
+  p1:
+    # 候选 SQL + 安检共用流通下限（万元）；注释掉则使用 constants.P1_SELECT_MIN_CIRC_MV_WAN（默认 100 亿 = 1000000）
+    select_min_circ_mv_wan: 1000000
+    # 十一维后与 fund_memory_score（0~200→0~100）凸组合权重；0=纯十一维；缺省使用 constants.FUND_MEMORY_WEIGHT_P1
+    fund_memory_weight_p1: 0.10
+    # scan_engine 的 danger 熔断会写入 blacklist.json；默认不在 P1 洗盘中拦截（避免强势股误判后次日被踢出底仓池）。需旧行为时改为 true。
+    respect_scan_blacklist_for_p1: false
+    # Tushare share_float「未来约30天解禁」拦截；默认 false（不调接口，避免专线/代理超时）。需要时再改为 true。
+    use_tushare_unlock_blacklist_for_p1: false
+    # 组合特征乘数参数：只奖励跨维度共振，不奖励单项极值
+    combo_multiplier:
+      enabled: true
+      min: 0.90
+      max: 1.18
+      top_tier: 1.20
+      second_tier: 1.15
+      third_tier: 1.12
+      industry_dark_flow: 1.08
+      fund_shape_wakeup: 1.15
+      fund_pulse_confirm: 1.10
+      weak_pattern_discount: 0.94
+      bubble_discount: 0.92
+      hot_low_fund_discount: 0.95
+      chip_core_min: 8.5
+      trend_dist_min: 6.0
+      mat_min: 4.5
+      fund_core_min: 8.0
+      momentum_core_min: 6.5
+      golden_core_min: 8.0
+      healthy_core_min: 2.4
+      slope_core_min: 4.2
+      fund_hot_min: 11.0
+      chip_hot_min: 6.0
+      trend_health_min: 2.0
+      industry_bonus_min: 8.0
+      rank_bonus_min: 2.0
+    # 近 20 日股性黑名单惩罚：长上影 / 冲高回落反复出现则折价或拦截
+    stock_behavior_penalty:
+      enabled: true
+      lookback_days: 20
+      long_upper_shadow_hits_min: 3
+      intraday_dump_hits_min: 3
+      score_penalty: 8.0
+    profiles:
+      # 严格：趋势市 / 主升浪精选
+      strict:
+        trend_ma120_min_ratio: 1.00      # MA60 >= MA120 * 此值
+        trend_slope_fastpass: 0.35         # MA20 五日斜率弱多头放行阈值
+        near_ma20_min_ratio: 0.99          # 收盘 >= MA20 * 此值 视为贴近均线
+        macd_bar_kill: -0.08               # MACD 柱低于此值淘汰
+        vol_divergence_ratio: 0.90           # 阳量 < 阴量 * 此值 视为量价背离
+        pass_line: 50.0                    # P1 十一维平滑分及格线：趋势市精选，提高底仓质量
+      # 中性：震荡市稳健（与原模块顶部 P1_* 常量一致）
+      neutral:
+        trend_ma120_min_ratio: 0.98
+        trend_slope_fastpass: 0.25
+        near_ma20_min_ratio: 0.985
+        macd_bar_kill: -0.13
+        vol_divergence_ratio: 0.85
+        pass_line: 48.0
+      # 放松：退潮 / 空头提高生存率（不放开硬风控底线）
+      relaxed:
+        trend_ma120_min_ratio: 0.975
+        trend_slope_fastpass: 0.10
+        near_ma20_min_ratio: 0.982
+        macd_bar_kill: -0.16
+        vol_divergence_ratio: 0.82
+        pass_line: 45.0
+
+  # ---------- P2 竞价筛选（P2-01~P2-04）----------
+  p2:
+    circ_mv_min_wan: 1000000.0
+    circ_mv_prefer_wan: 5000000.0
+    open_bias20_max_pct: 8.0
+    auction_pct_chg_max: 6.0
+    prev_turnover_min_pct: 2.4
+    # P2-01·★主升浪确认
+    s1_prev_pct_low: 4.0
+    s1_prev_pct_high: 6.0
+    s1_prev_vol_ratio_min: 1.75
+    # 【V26.5 修复】策略一昨日获利盘下限（筹码集中度门槛）
+    s1_winner_min: 85.0
+    # 【V26.2 新增】今日竞价量比下限（涨跌停时跳过）
+    s1_vol_ratio_min: 1.8
+    s1_auction_pct_low: 1.0
+    s1_auction_pct_high: 3.0
+    # 【V26.2 新增】昨 ATR 超限否决阈值
+    s1_atr_pct_max: 8.0
+    # P2-02·★机构连贯发力
+    s2_prev_pct_low: 4.0
+    s2_prev_pct_high: 6.0
+    s2_pct_low: 0.5
+    s2_pct_high: 2.5
+    s2_auction_pct_low: 0.5
+    s2_auction_pct_high: 2.5
+    s2_auction_turnover_min_pct: 0.5
+    s2_upper_shadow_max_pct: 2.5
+    s2_inst_net_buy_ratio_of_float_mv: 0.00006
+    s2_prev_vol_ratio_min: 1.8
+    # P2-03·★无尽苍穹
+    s3_winner_min: 90.0
+    s3_pct_low: 1.0
+    s3_pct_high: 4.0
+    s3_vol_ratio_min: 1.5
+    s3_atr_pct_max: 8.0
+    s3_auction_amount_vs_prev_ratio_min: 0.05
+    # 【V26.2 新增】P2-03 涨跌停宽容：涨停时换手下限适当放宽
+    s3_auction_turnover_min_pct: 0.4
+    # 【V26.2 新增】P2-03 长上影容忍（涨停日上影正常存在）
+    s3_upper_shadow_max_pct: 2.5
+    # 【V26.5 修复】策略三龙虎榜机构净买动态比例门槛（连续2日）
+    s3_inst_net_buy_ratio_of_float_mv: 0.00006
+    # P2-04·★底仓重金点火
+    s4_circ_mv_min_wan: 5000000.0
+    s4_net_main_ratio_of_float_mv: 0.00018
+    s4_pct_low: 2.0
+    s4_pct_high: 4.0
+    s4_strth_ratio_of_circ_mv_wan: 0.0004
+
+  # ---------- P3 盘中筛选（原 P3IntradayScreenerConfig 默认值）----------
+  p3:
+    circ_mv_min_wan: 1000000.0
+    bias_20_max_pct: 8.0
+    # 【V26.2 新增】P3-01 昨日涨幅区间（涨跌停时放宽到9.5%）
+    s1_prev_pct_low: 3.0
+    s1_prev_pct_high: 6.0
+    s1_pct_low: 3.0
+    s1_pct_high: 6.5
+    s1_vol_ma5_mult: 1.5
+    s1_winner_min: 85.0
+    # 【V26.2 新增】P3-01 ATR上限防飞刀
+    s1_atr_pct_max: 8.0
+    # 【V26.2 新增】P3-03 昨日涨幅区间（涨跌停时放宽）
+    s3_prev_pct_low: 3.0
+    s3_prev_pct_high: 6.0
+    s3_winner_min: 90.0
+    s3_pct_low: 2.0
+    s3_pct_high: 5.0
+    s3_vol_ratio_min: 1.5
+    s3_rsi_fly: 80.0
+    # 【V26.2 新增】P3-03 长上影容忍（涨停日上影正常存在）
+    s3_upper_shadow_max_pct: 2.5
+    # P3-02 均线低吸
+    s2_pct_low: -1.0
+    s2_pct_high: 3.0
+    s2_ma20_touch_ratio: 1.015
+    s2_winner_min: 80.0
+    s2_turnover_fly_max: 20.0
+    s2_pb_fly_max: 10.0
+    s4_circ_mv_min_wan: 3000000.0
+    s4_net_main_ratio_of_float_mv: 0.00035
+    s4_inst_net_buy_ratio_of_float_mv: 0.00006
+    # 【V26.2 新增】P3-05 MA20斜率下限（须有上攻动能）
+    s5_ma20_slope_min: 0.5
+    s5_vol_ratio_min: 1.65
+    s5_cost50_mult: 1.05
+    s5_atr_fly_max: 6.0
+    # 【V26.2 新增】P3-06 ATR上限防飞刀
+    s6_atr_pct_max: 8.0
+    s6_pct_low: 2.0
+    s6_pct_high: 5.0
+    s6_winner_min: 80.0
+    s6_bias_fly: 10.0
+    s7_pct_low: 1.0
+    s7_pct_high: 3.0
+    s7_net_main_ratio_of_float_mv: 0.00025
+    s7_pre_close_low_mult: 0.99
+    s7_vol_ratio_low: 1.2
+    s7_vol_ratio_high: 2.5
+    s7_turnover_fly: 30.0
+    s8_vol_vs_vma5_mult: 1.85
+    s8_pct_low: 0.8
+    s8_pct_high: 5.5
+    s8_vr_min: 1.10
+    s8_winner_min: 78.0
+    s8_ma20_slope_min: 0.15
+    s8_yang_body_min: 0.998
+    # 【V26.2 新增】P3-08 昨日涨幅区间（涨跌停时放宽）
+    s8_prev_pct_low: 3.0
+    s8_prev_pct_high: 6.0
+    breakout_yang_vol_ratio_min: 1.05
+    breakout_vwap_eps: 0.004
+    giant_min_vol_ratio: 1.2
+
+  # ---------- P4 尾盘筛选（核心六战法：P4-01 ~ P4-06）----------
+  p4:
+    circ_mv_min_wan: 1000000.0
+    global_fund_reflow_pct_max: 1.2
+    global_upper_shadow_ratio_max: 0.025
+    global_upper_turnover_f_min: 12.0
+    ma60_downtrend_rel: 0.98
+    # P4-01 光头阳线抢筹
+    s1_close_to_high_min: 0.992
+    s1_pct_low: 3.0
+    s1_pct_high: 6.0
+    s1_vol_ratio_min: 1.25
+    s1_winner_min: 86.0
+    s1_ma20_slope_min: 0.5
+    # P4-02 筹码锁死创新高
+    s2_winner_min: 92.0
+    s2_turnover_f_low: 1.0
+    s2_turnover_f_high: 9.0
+    # P4-03 机构尾盘潜伏
+    s3_net_main_ratio_of_float_mv: 0.00042
+    s3_inst_net_buy_ratio_of_float_mv: 0.00008
+    s3_pct_low: 0.5
+    s3_pct_high: 2.8
+    # P4-04 均线缩量低吸
+    s4_vol_shrink_ratio: 0.8
+    s4_pct_low: -1.0
+    s4_pct_high: 2.0
+    s4_touch_ma_eps: 1.01
+    s4_winner_fly_lt: 80.0
+    # P4-05 强势洗盘承接
+    s5_pe_max: 20.0
+    s5_turnover_f_max_lt: 3.8
+    s5_pct_low: -1.0
+    s5_pct_high: 1.5
+    # P4-06 动能突破共振（P4新序号）
+    s6_momentum_prev_pct_low: 3.0
+    s6_momentum_prev_pct_high: 6.0
+    s6_momentum_pct_low: 1.0
+    s6_momentum_pct_high: 5.0
+    s6_momentum_atr_pct_fly_gt: 6.0
+    s6_momentum_bias_fly_gt: 12.0
+    s6_momentum_net_main_ratio_of_float_mv: 0.00024
+    s6_momentum_min_vol_vs_vma5: 0.45
+    # P4-05 温和均线修复（辅助标签）
+    s6_pct_low: 1.0
+    s6_pct_high: 3.0
+    s6_mhist_expand_min_ratio: 1.07
+    s6_winner_min: 80.0
+    s6_turnover_f_min: 0.6
+    # 兼容保留：原 P4-07 ~ P4-10 相关门限
+    s7_net_main_ratio_of_float_mv: 0.00028
+    s7_ma5_touch_eps: 1.005
+    s7_pct_low: 1.0
+    s7_pct_high: 4.0
+    s7_vol_ratio_min: 1.35
+    s7_turnover_f_fly_gt: 18.0
+    s9_touch_lookback_bars: 6
+    s9_touch_ma20_max_mult: 1.018
+    s9_pct_low: 0.3
+    s9_pct_high: 5.0
+    s9_vr_min: 0.98
+    s9_winner_min: 78.0
+    s9_ma20_slope_min: 0.12
+    s9_vol_confirm_vr_extra: 0.08
+    s9_enabled: true
+    s10_ma5_touch_eps: 1.014
+    s10_shrink_vs_vma5_max: 0.88
+    s10_pullback_lookback: 5
+    s10_pct_low: 0.35
+    s10_pct_high: 5.8
+    s10_vr_min: 0.95
+    s10_winner_min: 76.0
+    s10_ma20_slope_min: 0.08
+
+  # ---------- P5 盘后真龙（最终版：资金 / 趋势 / 结构 / VWAP 防伪 + V26.6优化）----------
+  # 说明：P5-09 已彻底删除；P5-10 / P5-11 已迁出主池；P5-12 / P5-13 / P5-14 已拆分。
+  # P5 爆发分·均线动能补偿：bias_ma5_ma20=(ma5-ma20)/ma20*100；[3%,12%] 为健康主升浪参考带；>18% 按市值分级降权；MA20 斜率加速奖励见 enable_ma_compensation。
+  # 【V26.6 新增优化】：
+  # - 基准分与策略命中质量绑定（修复裸48分）
+  # - VWAP惩罚与策略强度挂钩软化（强共振可容忍更大VWAP偏差）
+  # - 分数截断与风控建议分联动
+  # - 连续命中天数加成（查询signal_log）
+  # - 相对市场量比映射
+  # - 板块内部分化因子
+  p5:
+    # ---------- 核心门禁 / 资源修正 ----------
+    enable_ma_compensation: true
+    enable_vwap_penalty: true
+    ma_bias_overheat_pct: 16.0
+    circ_mv_wan_large_min: 3000000.0
+    # 与 P1 流通下限一致（100 亿 = 1000000 万）
+    circ_mv_wan_mid_min: 1000000.0
+    ma_overheat_mult_large: 0.85
+    ma_overheat_mult_mid: 0.95
+    ma_slope_reward_threshold_pct: 0.8
+    ma_slope_reward_mult_min: 1.25
+    ma_slope_reward_mult_max: 1.35
+    ma_slope_reward_interp_high_pct: 2.0
+    vwap_dev_soft_pct: 1.8
+    vwap_dev_hard_pct: 3.5
+    vwap_tail_spike_pct: 1.2
+    vwap_tail_spike_mult: 0.72
+    vwap_hard_mult: 0.55
+    vwap_tail_minutes: 15
+
+    # ---------- V26.6 板块内部分化修正 ----------
+    # 强势板块 Beta 门槛（≥此值视为热板块，个股涨幅同步则乘子提升）
+    sector_diff_beta_th: 1.10
+    # 个股涨幅 vs 板块 Beta 的偏离阈值（个股涨幅超过此值视为强于板块）
+    sector_diff_pct_th: 1.5
+
+    # ---------- V26.6 连续命中查询参数 ----------
+    # signal_log 表查询连续入选天数的回溯窗口（交易日）
+    consec_hit_lookback_days: 5
+
+    # ---------- 维度 A：资金底座 ----------
+    s3_net_main_ratio_of_float_mv: 0.0004
+    s6_inst_sum3_ratio_of_float_mv: 0.00012
+    s6_pct_low: -3.0
+    s6_pct_high: 0.0
+    s6_vol_under_vma5_ratio: 0.8
+    s6_net_main_fly_ratio_of_float_mv: 0.00035
+    s7_pct_low: -2.0
+    s7_pct_high: 2.5
+    s7_pe_max: 30.0
+    s7_circ_mv_min_wan: 1000000.0
+    s8_circ_mv_min_wan: 1000000.0
+    s8_circ_mv_max_wan: 5000000.0
+    s8_net_main_ratio_of_float_mv: 0.00028
+    s8_turnover_f_low: 3.6
+    s8_turnover_f_high: 14.0
+
+    # ---------- 维度 B：结构买点 ----------
+    s12_break_min_pct: 0.35
+    s12_ma20_touch_max_mult: 1.022
+    s12_pct_low: -1.2
+    s12_pct_high: 4.8
+    s12_box_range_min: 0.055
+    s12_box_range_max: 0.36
+    s12_winner_min: 74.0
+    s12_vr_min: 0.9
+    s13_cohesion_max_pct: 2.85
+    s13_spread_min_pct: 2.05
+    s13_ma20_slope_min: 0.45
+    s13_pct_low: -0.8
+    s13_pct_high: 6.2
+    s13_winner_min: 72.0
+    s13_vr_min: 0.95
+
+    # ---------- 维度 C：趋势量价 ----------
+    global_bias_high: 10.0
+    global_bias_low: -15.0
+    s1_winner_min: 85.0
+    s1_vr_min: 1.6
+    s1_pct_low: 4.0
+    s1_pct_high: 6.0
+    # 【V26.2 新增】P5-01 涨停时涨幅上限放宽
+    s1_pct_high_limit_up: 9.9
+    s1_upper_shadow_ratio_fly_gt: 0.04
+    s2_winner_min: 80.0
+    s2_vol_over_vma5_mult: 2.0
+    s2_cost95_to_close_ratio_fly_lt: 1.05
+    s4_winner_min: 90.0
+    s4_ma20_slope_min: 1.0
+    s4_vol_over_vma5_max_mult: 1.5
+    s5_circ_mv_fly_lt_wan: 500000.0
+    s10_pe_max: 25.0
+    s10_ps_max: 5.0
+    s10_atr_pct_max: 3.5
+    s10_winner_fly_lt: 60.0
+    s11_pe_max: 30.0
+    s11_pct_low: 1.0
+    s11_pct_high: 3.0
+    s11_winner_min: 80.0
+
+  # ---------- 黄金起爆 / P5 全日门禁（原 strat_base / scan_engine 模块常量）----------
+  golden_burst:
+    golden_burst_pct_low: 4.0        # 预留：统一黄金起爆涨幅带下沿（与历史常量对齐）
+    golden_burst_pct_high: 6.0
+    golden_burst_vr_low: 1.8
+    golden_burst_vr_high: 2.5
+    p5_golden_vr_min: 1.1            # P5 strict_golden_burst_ok：全日量比下限（保底出票）
+    p5_golden_pct_low: 2.0           # P5 涨幅窗口下沿（开区间）
+    p5_golden_pct_high: 7.0          # P5 涨幅窗口上沿（开区间）
+
+# =============================================================================
+# sop_v11（历史节名保留）：大盘指数熔断 + 缩量观察池三键；UI 已移除纪律日志/背书池/疲劳日
+# =============================================================================
+sop_v11:
+  enabled: true
+  # 系统级熔断：东财 push2 指数涨跌幅 f170（单位 0.01%）；仅作提示，默认不拦截引擎
+  circuit_breaker:
+    enabled: true
+    # 14:30 后（北京时间）若任一指数当日跌幅 ≤ 阈值（负数）则触发 advisory
+    active_after_hhmm: "14:30"
+    index_thresholds_pct:
+      "000300.SH": -2.0              # 沪深300
+      "399006.SZ": -2.5              # 创业板指（波动更大可略宽）
+    # 为 true 时：指挥舱对 P4 扫描前弹出强警告（需在 app 内接 enforce）
+    enforce_block_p4: false
+  # 东财 secid：1=沪 0=深
+  index_secid_map:
+    "000300.SH": "1.000300"
+    "399006.SZ": "0.399006"
+  # ---------------------------------------------------------------------------
+  # 极端缩量期观察池 / 门禁放宽（实盘可调，改 config 后随 mtime 自动重载，无需改源码）
+  # ---------------------------------------------------------------------------
+  observation_pool_relax:
+    # 触发全市场「缩量语境」的量比中位数上限：med_vr 低于此且近5日均换手低迷时 market_contraction_score 可达 ≥0.7
+    vr_shrink_gate: 0.95
+    # 享受「主力净流入为正 → 股性呆滞换手地板再 ×0.8」的流通市值下限（单位：亿元）
+    large_cap_yi_min: 500.0
+    # 上述再放宽后，大中盘真实换手率（turnover_rate_f，单位：%）的绝对底线
+    turnover_floor_pct: 0.52

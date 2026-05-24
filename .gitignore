@@ -1,0 +1,44 @@
+# ============================================================
+# 小杰AI选股系统 — Git 忽略规则
+# ============================================================
+
+# --- 敏感配置 ---
+.env                     # API Key 等敏感环境变量（已在 .env.example 提供了模板）
+*.duckdb                # 历史行情数据库
+
+# --- Python 缓存 ---
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# --- 日志与临时文件 ---
+*.log
+*.tmp
+*.cache
+*.bak
+*.bak2
+
+# --- 运行时数据（不提交，供每个用户本地生成）---
+data/runtime/                    # 运行时状态、缓存、日志
+data/runtime/state/             # 状态文件
+data/runtime/pool_cache/        # P1 底仓缓存
+data/runtime/p1_gene/           # P1 基因缓存
+xuanguchi/                      # 选股池输出目录
+docs/*.html                     # HTML 文档（可由 .md 生成）
+_wbat.py                        # 临时批处理脚本
+_checkbat.py                    # 临时检查脚本
+_temp_*.py                      # 优化过程临时脚本
+*.png                           # 可能生成的图表
+*.jpg
+*.jpeg

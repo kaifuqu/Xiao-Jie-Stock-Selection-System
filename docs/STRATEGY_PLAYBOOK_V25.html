@@ -1,0 +1,327 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小杰AI选股系统 Pro V26.5 · 选股战法体系说明</title>
+  <!-- 完全离线：无外链字体，仅用本机已安装字体 -->
+  <style>
+    :root {
+      --ink: #1a1d26;
+      --muted: #5c6370;
+      --accent: #c45c26;
+      --accent-soft: #fdf6f0;
+      --border: #e2e4e9;
+      --card: #fafbfc;
+      --maxw: 42rem;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 2.5rem 1.25rem 4rem;
+      font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", SimSun, "STSong", "Microsoft YaHei UI", "PingFang SC", serif;
+      font-size: 17px;
+      line-height: 1.75;
+      color: var(--ink);
+      background: linear-gradient(180deg, #f8f6f3 0%, #fff 18%);
+    }
+    .wrap { max-width: var(--maxw); margin: 0 auto; }
+    header.doc-head {
+      padding-bottom: 1.75rem;
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 700;
+      margin: 0 0 0.5rem;
+      letter-spacing: 0.02em;
+      color: var(--ink);
+    }
+    .lede {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin: 0;
+    }
+    .lede strong { color: var(--ink); }
+    h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin: 2.25rem 0 0.85rem;
+      color: var(--accent);
+      border-left: 4px solid var(--accent);
+      padding-left: 0.65rem;
+    }
+    h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 1.5rem 0 0.6rem;
+      color: var(--ink);
+    }
+    p { margin: 0.65rem 0; }
+    ul, ol { margin: 0.65rem 0; padding-left: 1.35rem; }
+    li { margin: 0.35rem 0; }
+    hr {
+      border: none;
+      border-top: 1px dashed var(--border);
+      margin: 2rem 0;
+    }
+    code, .path {
+      font-family: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Monaco, "Courier New", monospace;
+      font-size: 0.88em;
+      background: var(--accent-soft);
+      padding: 0.12em 0.35em;
+      border-radius: 3px;
+      color: #6b3418;
+    }
+    .callout {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.15rem;
+      margin: 1rem 0;
+      font-size: 0.96rem;
+    }
+    .formula {
+      font-family: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Monaco, "Courier New", monospace;
+      font-size: 0.9rem;
+      background: #f4f5f7;
+      padding: 0.85rem 1rem;
+      border-radius: 6px;
+      margin: 1rem 0;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      margin: 1rem 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--accent-soft);
+      font-weight: 600;
+    }
+    .dim-list strong { color: var(--accent); }
+    footer.note {
+      margin-top: 2.5rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.88rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <article class="wrap">
+    <header class="doc-head">
+      <h1>小杰AI选股系统 Pro V26.5 · 选股战法体系说明</h1>
+      <p class="lede"><strong>文档定位：</strong>基于当前仓库实现（<code>scan_engine.py</code>、<code>pool_manager.py</code>、<code>core/strategies/*</code>）整理的产品级战法说明书，便于理解「每一步在交易上想解决什么问题」，而非 API 手册。<br>
+      <strong>版本：</strong>与 <code>constants.APP_VERSION</code>（V26.5）对齐；若本地改过 <code>config.yaml</code> 或策略实验室覆写，请以运行态配置为准。</p>
+    </header>
+
+    <h2>一、系统全局底座与战略定位</h2>
+
+    <h3>1.1 DuckDB 与「宽表」到底意味着什么？</h3>
+    <p>实盘链路里，<strong>DuckDB</strong> 是日线与特征的中枢：行情、复权、技术指标、北向与主力等字段在入库时尽量<strong>一次算清、增量修补</strong>，供 P1 洗盘、<code>scan_engine</code> 全池扫描、回测与巡检共用。</p>
+    <p>口径上要分清两层说法，避免和旧文档「52 维」打架：</p>
+    <ul>
+      <li><strong>工程宽表：</strong>在约 <strong>55 个基础行情与指标字段</strong>之上，夜间增量管道还会维护 <strong><code>capital_resonance_score</code>（资金共振）</strong> 与 <strong><code>fund_memory_score</code>（股性记忆）</strong> 两列；常量列表名里仍习惯叫 <code>ALL_55_COLS</code>，属于历史命名习惯。</li>
+      <li><strong>科研或文档里的「52 维」：</strong>多指出离线工具或早期 KPI 语境，与当前实盘宽表<strong>不是同一张维度表</strong>。读审计底稿时，以 <code>data_fetcher</code> 与 <code>db_core</code> 契约为准。</li>
+    </ul>
+    <p><strong>交易意图：</strong>把「算一次、处处用」写进架构，减少 UI 扫描时重复造轮子；代价是<strong>表结构演进要克制</strong>，大改列集要配合全量重算或迁移。</p>
+
+    <h3>1.2 市值门槛：「生数据」与「入选池」是两条线</h3>
+    <p>当前常量（<code>constants.py</code>）里有两道容易混淆的闸：</p>
+    <table>
+      <thead>
+        <tr>
+          <th>门槛</th>
+          <th>典型含义（万元口径）</th>
+          <th>交易意图</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong><code>DAILY_BASIC_MIN_MV_WAN</code></strong>（默认 <strong>100 亿</strong>）</td>
+          <td>日线同步与下载侧：总市值或流通市值<strong>任一侧</strong>达到该量级，才进入「当日活跃候选」</td>
+          <td><strong>数据供给侧：</strong>先把明显小票噪音从生数据层挡在外面，减轻存储与特征计算；接近「大资金、机构级阵地战」的<strong>数据底座</strong></td>
+        </tr>
+        <tr>
+          <td><strong><code>P1_SELECT_MIN_CIRC_MV_WAN</code></strong>（默认 <strong>60 亿</strong>，可由 <code>config.yaml</code> → <code>strategies.p1.select_min_circ_mv_wan</code> 覆写）</td>
+          <td>P1 候选 SQL、<code>pool_manager</code> 安检、<code>scan_engine</code> 初筛共用的<strong>流通市值下限</strong></td>
+          <td><strong>选股需求侧：</strong>在「不要太小」与「不要过度精英化」之间折中；若库里历史行只有 ≥100 亿，把 P1 改成 60 亿也未必立刻多出票，取决于本地库是否真有 60～100 亿区间的日线</td>
+        </tr>
+      </tbody>
+    </table>
+    <p><strong>一句话：</strong>100 亿更像「养数据的护城河」；60 亿（可配）是「底仓池要不要稍微宽一点」的产品旋钮。两者叠加，共同塑造系统的<strong>大中盘审美</strong>，而不是游资小票擂台。</p>
+
+    <h3>1.3 「机构级阵地战」在代码里的落点</h3>
+    <ul>
+      <li><strong>流动性与体量：</strong>流通下限加上日线里的成交额、换手、主力与北向等，让信号默认发生在「能承载大资金」的标的区间。</li>
+      <li><strong>右侧权重结构上移：</strong>守护进程在 <strong>14:35 起</strong>进入 <strong>P4 优先走廊</strong>，<strong>禁止再派 P3 扫描线程</strong>；尾盘 <strong>14:35、40、45、50</strong> 四枪 P4 子线程内可<strong>长达 15 分钟等锁</strong>——工程上明说：<strong>尾盘确定性比盘中噪音更贵</strong>。</li>
+      <li><strong>分时不是微观博弈引擎：</strong>系统依赖 <strong>六槽快照</strong>（935、1030、1125、1325、1425、1440）把量能与 VR 锚在几个<strong>可复现时点</strong>，而不是在 UI 里用 Tick 级盘口做高频博弈；P3 的「热成像」也是<strong>按代码与表结构读取统计切片</strong>，不是炒单逻辑。</li>
+    </ul>
+
+    <hr>
+
+    <h2>二、P1 底仓初筛：十一维平滑分与 pass_line</h2>
+    <p>P1 是<strong>全系统的基因层</strong>：它决定哪些票「有资格」进入 P2～P5 的战法视野（在 <code>scan_engine</code> 里，P1 平滑分不过线则<strong>不再跑后续战法匹配</strong>，并会计入 <code>p1_prescreen</code> 统计）。实现上，核心数学全部在 <code>score_calibration.compute_p1_multi_dim_smooth_score</code>，<code>pool_manager</code> 与扫描侧共用同一函数，避免「池子里一套分、扫描里另一套分」。</p>
+
+    <h3>2.1 商业意图：为什么用「平滑插值」而不是硬阈值瀑布？</h3>
+    <p>A 股日线噪声大，硬 if/else 容易产生「差 0.01 就从满分掉到零分」的悬崖效应。十一维大量使用 <strong><code>np.interp</code> 分段线性映射</strong>，把连续基本面与技术面信息压到<strong>有上限的贡献</strong>，再在总分上 cap 到 100。意图是：<strong>包容正常波动，惩罚极端失衡</strong>，让池子「有一批合格的中坚力量」，而不是只剩完美图形。</p>
+
+    <h3>2.2 十一维逐项解读（交易语言）</h3>
+    <p>下列满分与节点以源码为准，这里强调<strong>每维在解决什么决策焦虑</strong>。</p>
+    <ol class="dim-list">
+      <li><strong>筹码真空（最高 18 分）</strong>　用<strong>真实自由换手 <code>turnover_rate_f</code></strong>（缺失时用成交量反算）衡量筹码是否在交换。节点覆盖 <strong>0.8%～8%</strong> 等日常可达区间。<strong>意图：</strong>奖励适度活跃、惩罚死筹或过度狂热；当日换手为 0 时用近 5 日均换手兜底，避免停牌或数据缺口把整条维度打穿。</li>
+      <li><strong>趋势距离（最高 16 分）</strong>　看 <strong>MA20 相对 MA60 的百分比距离</strong>。<strong>意图：</strong>多头拉开、趋势有空间时给分；拉得太夸张则降分——避免「趋势末端博最后一棒」的审美。</li>
+      <li><strong>均线成熟（最高 12 分）</strong>　看 <strong>MA20/MA60 比值</strong>是否在 <strong>1.02～1.15</strong> 附近的「成熟多头平台」。<strong>意图：</strong>偏好走稳的中期结构，而不是均线乱纠缠或过度乖离的畸形态。</li>
+      <li><strong>资金攻击（最高 16 分）</strong>　双因子：<strong>近 5 日时间加权（主力+北向）净流入/成交额</strong>映射一部分；再用 <strong>max(量比, 换手/2)</strong> 作活跃度代理映射另一部分，合计封顶 16。<strong>意图：</strong>把「钱真的在进」与「今天有人交易」拆开又合并，缓解单一字段量纲不一致导致的全场零分。</li>
+      <li><strong>波段涨幅（最高 12 分）</strong>　用 <strong><code>max_60d_pct</code></strong>，<strong>8%～25%</strong> 为核心舒适区（偏大盘主升审美）。<strong>意图：</strong>既不要死鱼，也不要已经透支完波段、只剩博弈空间的品种。</li>
+      <li><strong>黄金起爆（最高 7 分）</strong>　<strong>涨幅与量比共振</strong>：例如涨幅 4%～6% 且量比 1.8～2.5 给满档，弱一档给部分分。<strong>意图：</strong>捕捉「温和放量突破」的典型机构审美，而不是无脑追涨停。</li>
+      <li><strong>趋势健康（最高 4 分）</strong>　用 <strong>bias20（乖离）</strong> 的插值，贴线略优，双向极端降分。<strong>意图：</strong>价格离均线太近或太远都有问题——太近可能没趋势，太远可能回撤风险大。</li>
+      <li><strong>主升斜率（最高 8 分）</strong>　<strong><code>ma20_slope_5</code></strong>（五年化斜率百分数）过快或过慢都降分。<strong>意图：</strong>识别「匀速主升」，过滤躺平和疯狗斜率。</li>
+      <li><strong>动态 PE（最高 4 分）</strong>　相对<strong>行业 75 分位 <code>q75</code></strong> 插值，过高连续降分。<strong>意图：</strong>同一行业内横向比较，防止估值离谱全靠题材撑；这是<strong>软分</strong>，不是 PE 硬闸的全部。</li>
+      <li><strong>高位熔断（基础 3 分，可倒扣）</strong>　bias20 过高时，先压「熔断」维得分，再额外 −12。<strong>意图：</strong>与 P1 前置乖离类硬闸互补，在<strong>平滑总分</strong>里再扎一根钉子，减少「妖股靠一两项拉满混进池子」。</li>
+      <li><strong>市值与板块加分（附加）</strong>　动态行业贝塔；板块排名前 3 名 +5、前 8 名 +2；流通市值（亿）500～1000、1000～2000、2000+ 分档加 2～4 分。<strong>意图：</strong>同样技术面下，优先「行业在风口、板块顺位靠前、体量够承载」的标的。</li>
+    </ol>
+
+    <h3>2.3 pass_line：及格线哲学（默认约 50 分）</h3>
+    <ul>
+      <li><strong>来源：</strong><code>config.yaml</code> → <code>strategies.p1.profiles</code> 下 strict、neutral、relaxed 三档的 <strong><code>pass_line</code></strong>，由 <code>config_manager.get_p1_regime_thresholds</code> 按大盘环境映射；默认多档为 <strong>50</strong>。</li>
+      <li><strong>放行含义：</strong>十一维（及下文融合）之后 <strong>总分 ≥ pass_line</strong> 才视为「P1 基因及格」，扫描侧才继续 P2～P5；否则统一理由 <strong>「平滑得分不达标」</strong>，明细里带 <strong>「未达标比对」</strong>。</li>
+      <li><strong>交易意图：</strong>50 分是<strong>包容性</strong>与<strong>僵尸过滤</strong>的折中——不是「满分才配活着」，而是「多项维度没有结构性烂掉」。可在实验室或 YAML 里收紧到 52～55 提高纯度，或配合观察池逻辑（主池更严、缩量期观察池略宽）。</li>
+    </ul>
+
+    <h3>2.4 股性记忆 fund_memory_score（可选凸组合）</h3>
+    <p>若 <code>fund_memory_weight_p1 &gt; 0</code>（来自 YAML 或常量 <code>FUND_MEMORY_WEIGHT_P1</code>），最终分会在 capped 前做凸组合（记忆分列 0～200 先映射到 0～100）：</p>
+    <div class="formula">最终 ≈ (1 − w) × 十一维小计 + w × 记忆分(0～100)</div>
+    <p><strong>意图：</strong>奖励「近期有资金痕迹、股性活跃」的大票；<strong>w 设为 0</strong> 则纯十一维，入选更严。P1 <strong>不</strong>把 <code>capital_resonance_score</code> 当硬闸（与 P3～P5 动态分里的共振注入分离）。</p>
+
+    <h3>2.5 P1 前置安检（pool_manager 侧，与扫描对齐）</h3>
+    <p>在十一维之前，还有<strong>流通市值闸、解禁与惩罚黑名单、PE 与流动性、Regime 阈值（MA120 粘合、MACD 柱、量价背离等）</strong>与<strong>容错档</strong>机制。<strong>意图：</strong>先挡「明显不能碰」的雷，再谈打分；强信号时<strong>适度放宽</strong>部分阈值，避免机械规则错杀主升浪——具体见 <code>pool_manager</code> 文档字符串与淘汰表 <code>reason</code>。</p>
+
+    <hr>
+
+    <h2>三、P2 竞价与 P3 盘中：巡逻、跟踪，而非主决战</h2>
+
+    <h3>3.1 P2：开盘「定调」的四策略胸甲</h3>
+    <ul>
+      <li><strong>结构：</strong>硬筛选在 <code>p2_auction_screener.py</code>（全局否决与四大竞价策略）；<code>strat_p2_auction.P2Auction</code> 负责组装 burst、surge、风控合并。</li>
+      <li><strong>黄金门禁：</strong>由 <code>scan_engine</code> 统一调用 <code>strict_golden_burst_ok</code>；对核心筛选通过标的可<strong>放宽</strong>，避免「策略三」这类标签被误杀。</li>
+      <li><strong>交易意图：</strong>竞价是<strong>信息密度最高的几分钟</strong>，用较少字段判断「今天资金认不认、开盘结构健不健康」，给盘中与尾盘接力做名单，而不是代替 P1 做底仓定义。</li>
+    </ul>
+
+    <h3>3.2 P3：盘中七策略与风控，但战略上已让路尾盘</h3>
+    <ul>
+      <li><strong>结构：</strong><code>p3_intraday_screener.py</code> 硬阈值与七大策略；<code>strat_p3_intraday.P3Intraday</code> 负责盘口组装、日内惩罚（如 VWAP、上影、早盘量比）、可选 DuckDB <code>vol_slice_60d</code> Z-Score、爆发分合成。</li>
+      <li><strong>工程上的「降权」</strong>（比单纯 <code>pool_weight</code> 更硬）：守护进程 <code>auto_sniper_daemon</code> 在 <strong>09:30～11:30、13:00～14:30</strong> 才允许 P3 扫描节拍；<strong>14:35 起进入 P4 优先走廊后，P3 不再派线程</strong>，避免与尾盘四枪抢 <code>_SCAN_BUSY</code>。P3 <strong>仅非阻塞抢锁</strong>；尾盘 P4 <strong>可阻塞等锁至多 15 分钟</strong>。</li>
+      <li><strong>综合分侧：</strong><code>scan_engine</code> 里 <code>pool_weight_map</code> 对 <strong>P3 为 1.0</strong>，<strong>P2 为 0.92</strong>，<strong>P4/P5 为 0.95</strong>——数字上 P3 并非被乘到最小；<strong>真正的降级在调度与业务叙事</strong>：系统把算力与确定性押在 <strong>14:35～14:50 的 P4</strong>，盘中更多是<strong>巡逻与接力</strong>。</li>
+    </ul>
+
+    <h3>3.3 「清除分时微观态博弈」在实现上指什么？</h3>
+    <ul>
+      <li>系统<strong>不</strong>在 <code>scan_engine</code> 里做 Tick 级盘口博弈链；分时依赖<strong>多时点快照槽位</strong>写入 JSON，供 VR 与量能锚点使用。</li>
+      <li>P3 的「热成像」来自<strong>预聚合切片表</strong>的统计矩，而不是秒级逐笔推理。</li>
+      <li><strong>交易意图：</strong>把可复现、可审计的<strong>中等频率信息</strong>当作主菜；<strong>不</strong>鼓励用不可回放的微观噪音当核心 alpha。</li>
+    </ul>
+
+    <hr>
+
+    <h2>四、P4 尾盘「盲狙」：14:40～14:50 的右侧核心窗</h2>
+
+    <h3>4.1 时间窗与工程保障</h3>
+    <ul>
+      <li><strong>四枪时间：</strong><strong>14:35、14:40、14:45、14:50</strong>（每枪子线程内最长等锁 <strong>900 秒</strong>）。</li>
+      <li><strong>产品话术上的「重仓核心窗」：</strong>注释中把 <strong>14:40～14:50</strong> 标为与 <strong>14:35～14:50</strong> 走廊对齐的<strong>业务重仓区间</strong>——前一枪接尾盘前序结构，后三枪落在<strong>收盘确定性</strong>最高的阶段。</li>
+      <li><strong>与 P3 的零重叠：</strong>14:35 起 P3 已停派，<strong>不存在「盘中扫描与尾盘抢锁」的内耗</strong>。</li>
+    </ul>
+
+    <h3>4.2 战法层：八策略物理胸甲</h3>
+    <p>硬阈值在 <code>p4_tail_screener.py</code>；引擎在 <code>strat_p4_tail.P4Tail</code>。特点：尾盘量比、成交额相对流通市值、筹码集中度、尾盘异常放量等映射为分项；叠加<strong>三层风控</strong>与<strong>黄金门禁放宽</strong>（核心筛选通过时）。<strong>交易意图：</strong>利用<strong>全天信息出齐、真假突破更难伪装</strong>的窗口，做<strong>右侧确认</strong>；适合作为<strong>调仓与次日预期的锚点</strong>，而不是开盘赌方向。</p>
+
+    <h3>4.3 在结果表里的「战略地位」</h3>
+    <p>P4/P5 命中多条战法时，<code>scan_engine</code> 会<strong>优先保留</strong>带「金·」「实锤」「九转序列」「龙虎榜机构」「布林CCI」「融资杠杆主力」「主力真金」「机构实锤」「★」等标签的说明，<strong>避免一行里堆七八个名字却不知道主逻辑是什么</strong>。<strong>交易意图：</strong>尾盘信号要<strong>可复盘、主叙事单一</strong>，方便次日执行与风控。</p>
+
+    <hr>
+
+    <h2>五、P5 盘后真龙与次日 09:35 二次验证</h2>
+
+    <h3>5.1 P5：收盘后的「全量定档」</h3>
+    <p><strong>结构：</strong><code>p5_postmarket_screener.py</code> 向量化硬逻辑；<code>strat_p5_postmarket.P5Postmarket</code> 单股窗口拼接与打分。<strong>特色软约束：</strong>例如 MA5&gt;MA20 且乖离过大时的<strong>虚火降权</strong>（按流通市值分档乘子）；MA20 五日斜率加速向上时的<strong>奖励乘子</strong>——<strong>意图：</strong>盘后看得更清，<strong>惩罚假突破、奖励趋势加速</strong>，但<strong>不</strong>一刀切否决。</p>
+
+    <h3>5.2 次日 09:35：容错闭环（跨进程 JSON）</h3>
+    <ul>
+      <li><strong>前夜：</strong>P5 会话写入 <code>data/runtime/state/p5_last_session.json</code>。</li>
+      <li><strong>次日早盘：</strong>守护进程在 <strong>09:35</strong> 快照后跑 <code>early_morning_p5_validation</code>，结果写入 <code>p5_yesterday_validated.json</code>。</li>
+      <li><strong>企微闸：</strong><code>notification_gateway</code> 对验证结果为「已剔除」的代码<strong>跳过推送</strong>，减少「昨晚兴奋、今早证伪」的噪音。</li>
+      <li><strong>交易意图：</strong>把 P5 从「一夜情信号」改成<strong>可验证的隔夜计划</strong>——<strong>允许错，但不允许错得无声无息</strong>。</li>
+    </ul>
+
+    <hr>
+
+    <h2>六、综合分与共振：P3～P5 的「第二轨」</h2>
+    <p>动态合成里，战法爆发分经 <code>burst_soft_cap</code>、<code>compress_surge_bonus</code>、截面极端抑制 <code>dampen_burst_by_extremes</code>，避免流动性噪声与妖股虚火叠乘。<code>capital_resonance_score</code> 在 P3～P5 路径以 <code>CAPITAL_RESONANCE_WEIGHT_P345</code>（默认约 8%）线性注入；P1 排序若用共振键则另有 <code>CAPITAL_RESONANCE_WEIGHT_P1</code>（约 18%）的语境——二者<strong>刻意分离</strong>，防止同一列在全链重复刷存在感。</p>
+
+    <hr>
+
+    <h2>七、优点与局限（诚实清单）</h2>
+    <h3>优点</h3>
+    <ul>
+      <li><strong>分层清晰：</strong>P1 解决「谁配进战场」，P2/P3 解决「何时试探」，P4 解决「收盘前下注」，P5 与次日验证解决「隔夜可信度」。</li>
+      <li><strong>工程与交易对齐：</strong>尾盘优先走廊、等锁策略，把稀缺资源押在信息最充分的时段。</li>
+      <li><strong>平滑分与及格线：</strong>比纯硬闸更少「一票否决误杀」，比纯排序更可解释（<code>score_details</code> 可展开到 UI）。</li>
+      <li><strong>特征管道化：</strong>共振与股性记忆夜间修补，白天扫描少拉 API、多信库。</li>
+    </ul>
+    <h3>局限与偏差来源</h3>
+    <ul>
+      <li><strong>数据依赖：</strong>生数据 100 亿门槛下，若历史从未落过 60～100 亿区间，调低 P1 下限也不会变魔术。</li>
+      <li><strong>Regime 与实验室覆写：</strong><code>pass_line</code> 与阈值若与默认值偏离，本页描述需以当前 YAML 为准。</li>
+      <li><strong>P1 与 Streamlit 基因缓存：</strong><code>strat_base.get_cached_p1_gene</code> 在带 UI 会话时读缓存；CLI 或无 session 路径有回退逻辑，极端情况下分与 UI 不完全一致——应用层应以 <code>scan_engine</code> / <code>pool_manager</code> 实际写入的 <code>p1_score</code> 为准。</li>
+      <li><strong>仍非圣杯：</strong>十一维是风格化筛选，在单边熊市或结构分化极端时，及格池可能变薄；需结合仓位与手动黑名单。</li>
+    </ul>
+
+    <hr>
+
+    <h2>八、使用注意事项（运维与实盘）</h2>
+    <ol>
+      <li><strong>先数据，后战法：</strong>新环境先保证 <code>sync_recent_days</code>、<code>_sync_daily_features()</code> 把共振与记忆列补齐，再谈 P1 池规模。</li>
+      <li><strong>统一版本与配置：</strong>改 <code>constants</code> 或 <code>config.yaml</code> 后，重启 Streamlit 与守护进程，避免一半进程读旧缓存。</li>
+      <li><strong>不要双进程抢队列：</strong>异步扫描队列由 filelock 互斥；不要同时开两个消费者进程抢 pending。</li>
+      <li><strong>P4 时间窗别手动堆任务：</strong>尾盘 15 分钟等锁是为挤进扫描；若同一时段跑重型 SQL，仍会拖长队列。</li>
+      <li><strong>观察 <code>p1_prescreen</code> 与淘汰表：</strong>池子变少时，先看是市值闸、平滑分还是前置安检，不要只盯战法层。</li>
+      <li><strong>P5 验证 JSON 权限：</strong><code>data/runtime/state/</code> 需进程可写，否则次日验证链断裂、企微闸失效。</li>
+      <li><strong>全量代码底稿：</strong>可执行 <code>python tools/generate_system_full_snapshot.py</code> 再生成 HTML 快照。</li>
+    </ol>
+
+    <hr>
+
+    <h2>九、延伸阅读（仓库内）</h2>
+    <table>
+      <thead>
+        <tr><th>文件</th><th>读什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>UPGRADE_LOG.md</code></td><td>P1 十一维、配置键、验收步骤</td></tr>
+        <tr><td><code>core/strategies/score_calibration.py</code></td><td>十一维数学实现与可选 fund_memory 融合</td></tr>
+        <tr><td><code>core/pool_manager.py</code></td><td>P1 安检、容错档、观察池</td></tr>
+        <tr><td><code>core/scan_engine.py</code></td><td>漏斗统计、P1 初筛、P4/P5 战法优先级、pool_weight</td></tr>
+        <tr><td><code>auto_sniper_daemon.py</code></td><td>P3/P4 调度走廊、等锁策略、分时六槽</td></tr>
+        <tr><td><code>core/p5_morning_validation.py</code></td><td>09:35 二次验证与 JSON 契约</td></tr>
+      </tbody>
+    </table>
+
+    <footer class="note">
+      本文档随代码演进应不定期修订；若与源码不一致，以源码与 <code>UPGRADE_LOG.md</code> 为最终解释。本页为<strong>完全离线</strong>单文件（无外链字体与脚本）。路径：<code>docs/STRATEGY_PLAYBOOK_V26.5.html</code>。
+    </footer>
+  </article>
+</body>
+</html>
