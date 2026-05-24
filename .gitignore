@@ -34,6 +34,8 @@ data/runtime/                    # 运行时状态、缓存、日志
 data/runtime/state/             # 状态文件
 data/runtime/pool_cache/        # P1 底仓缓存
 data/runtime/p1_gene/           # P1 基因缓存
+data/stock_names.json           # A股全量股票代码→名称映射（sync_stock_basic 时自动生成）
+data/*.duckdb                  # 本地行情数据库（已在 *.duckdb 行覆盖，此处强调）
 xuanguchi/                      # 选股池输出目录
 docs/*.html                     # HTML 文档（可由 .md 生成）
 _wbat.py                        # 临时批处理脚本

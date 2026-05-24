@@ -1618,25 +1618,47 @@ def execute_scan(target_pool_list):
                 # 【性能优化】P0 自选股也先从 DuckDB 获取名称
                 my_bar.progress(0.1, text="🌐 检查自选股名称...")
                 
-                # 从 DuckDB 批量获取名称
+                # 【V26.6 优化】优先从本地 JSON 文件读取名称，完全零 API 调用
                 db_name_map = {}
+                local_names_loaded = False
                 try:
-                    from data.db_core import get_read_conn
-                    placeholders = ",".join(["?"] * len(target_codes))
-                    with get_read_conn(read_only=True) as con:
-                        name_rows = con.execute(
-                            f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
-                            target_codes
-                        ).fetchall()
-                        for row in name_rows:
-                            if row and len(row) >= 2 and row[1]:
-                                code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
-                                db_name_map[code_part] = row[1]
+                    stock_names_json = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_names.json"
+                    )
+                    if os.path.exists(stock_names_json):
+                        import json as _json
+                        with open(stock_names_json, "r", encoding="utf-8") as _f:
+                            _local_map = _json.load(_f)
+                        for tc in target_codes:
+                            code_part = tc.split('.')[0][:6] if '.' in tc else tc[:6]
+                            if code_part in _local_map:
+                                db_name_map[code_part] = _local_map[code_part]
+                        local_names_loaded = True
+                        logging.debug("从 stock_names.json 加载 %s 只名称", len(db_name_map))
                 except Exception:
                     pass
-                
+
+                # DuckDB 补充（JSON 已覆盖绝大部分，DB 中可能有 JSON 之后新增的股票）
+                if not local_names_loaded:
+                    try:
+                        from data.db_core import get_read_conn
+                        placeholders = ",".join(["?"] * len(target_codes))
+                        with get_read_conn(read_only=True) as con:
+                            name_rows = con.execute(
+                                f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
+                                target_codes
+                            ).fetchall()
+                            for row in name_rows:
+                                if row and len(row) >= 2 and row[1]:
+                                    code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
+                                    if code_part not in db_name_map:
+                                        db_name_map[code_part] = row[1]
+                    except Exception:
+                        pass
+
                 missing_codes = [c for c in target_codes if c.split('.')[0][:6] not in db_name_map]
                 rt_map = {}
+                # 【V26.6 优化】只有在 JSON 和 DB 都没有名称时，才调用实时 API（通常极少）
                 if missing_codes:
                     my_bar.progress(0.1, text=f"🌐 同步缺失名称 ({len(missing_codes)} 只)...")
                     rt_map = fetch_realtime_batch(missing_codes)
@@ -1702,30 +1724,51 @@ def execute_scan(target_pool_list):
                         pass
                     return
                 
-                # 【性能优化】优先从 DuckDB 获取名称，仅对缺失名称的股票调用实时API
+                # 【V26.6 优化】优先从本地 JSON 文件读取名称，完全零 API 调用
                 my_bar.progress(0.05, text="🌐 检查股票名称...")
-                
-                # 从 DuckDB 批量获取股票名称映射
+
                 db_name_map = {}
+                local_names_loaded = False
                 try:
-                    from data.db_core import get_read_conn
-                    placeholders = ",".join(["?"] * len(target_codes))
-                    with get_read_conn(read_only=True) as con:
-                        name_rows = con.execute(
-                            f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
-                            target_codes
-                        ).fetchall()
-                        for row in name_rows:
-                            if row and len(row) >= 2 and row[1]:
-                                code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
-                                db_name_map[code_part] = row[1]
-                except Exception as e:
-                    logging.debug("从DuckDB批量获取名称失败: %s", e)
-                
+                    stock_names_json = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_names.json"
+                    )
+                    if os.path.exists(stock_names_json):
+                        import json as _json
+                        with open(stock_names_json, "r", encoding="utf-8") as _f:
+                            _local_map = _json.load(_f)
+                        for tc in target_codes:
+                            code_part = tc.split('.')[0][:6] if '.' in tc else tc[:6]
+                            if code_part in _local_map:
+                                db_name_map[code_part] = _local_map[code_part]
+                        local_names_loaded = True
+                        logging.debug("从 stock_names.json 加载 %s 只名称", len(db_name_map))
+                except Exception:
+                    pass
+
+                # DuckDB 补充（JSON 已覆盖绝大部分，DB 中可能有 JSON 之后新增的股票）
+                if not local_names_loaded:
+                    try:
+                        from data.db_core import get_read_conn
+                        placeholders = ",".join(["?"] * len(target_codes))
+                        with get_read_conn(read_only=True) as con:
+                            name_rows = con.execute(
+                                f"SELECT DISTINCT ts_code, name FROM daily_data WHERE ts_code IN ({placeholders}) AND name IS NOT NULL AND name != ''",
+                                target_codes
+                            ).fetchall()
+                            for row in name_rows:
+                                if row and len(row) >= 2 and row[1]:
+                                    code_part = str(row[0]).split('.')[0][:6] if '.' in str(row[0]) else str(row[0])[:6]
+                                    if code_part not in db_name_map:
+                                        db_name_map[code_part] = row[1]
+                    except Exception:
+                        pass
+
                 # 找出名称缺失的股票
                 missing_codes = [c for c in target_codes if c.split('.')[0][:6] not in db_name_map]
-                
+
                 rt_map = {}
+                # 【V26.6 优化】只有在 JSON 和 DB 都没有名称时，才调用实时 API（通常极少）
                 if missing_codes:
                     my_bar.progress(0.05, text=f"🌐 同步缺失名称 ({len(missing_codes)} 只)...")
                     rt_map = fetch_realtime_batch(missing_codes)

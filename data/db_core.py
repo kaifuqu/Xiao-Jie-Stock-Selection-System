@@ -1483,7 +1483,24 @@ def _read_security_dim_df() -> pd.DataFrame:
 
 
 def get_stock_names():
-    """从本地维表优先拉取 ts_code->name 映射；失败再回退 Tushare。"""
+    """
+    从本地维表优先拉取 ts_code->name 映射；失败再回退 Tushare。
+
+    【V26.6 优化】新增第一优先路径：直接从 data/stock_names.json 读取，
+    避免访问 DuckDB（可能涉及文件锁）和网络（Tushare API）。
+    """
+    # 【V26.6 优化】最快路径：JSON 文件（单次文件读取，无 DB 无网络）
+    try:
+        json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_names.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as _f:
+                import json as _json
+                _names = _json.load(_f)
+                if _names:
+                    return _names
+    except Exception:
+        pass
+
     try:
         df = _read_security_dim_df()
         if df is not None and not df.empty and "ts_code" in df.columns and "name" in df.columns:
@@ -2182,6 +2199,27 @@ def sync_stock_basic():
 
         _duckdb_write_with_lock_retry("sync_stock_basic", _write_stock_basic, max_attempts=5)
         logging.info(f"✅ 成功同步 {len(df_basic)} 只股票基础信息入库，并写入 dim_security。")
+
+        # 【V26.6 新增】同步落盘一份 JSON 文件（A股全量股票代码→中文名称映射），
+        # 供 UI 等调用方优先从本地文件读取，跳过 fetch_realtime_batch API 调用耗时。
+        # 后续 app.py 在同步缺失名称时优先加载此 JSON，完全零 API 调用。
+        try:
+            stock_names_json_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_names.json"
+            )
+            os.makedirs(os.path.dirname(stock_names_json_path), exist_ok=True)
+            name_dict: Dict[str, str] = {}
+            for _, row in df_basic.iterrows():
+                tc = str(row.get("ts_code", "")).strip()
+                nm = str(row.get("name", "")).strip()
+                if tc and nm and nm not in ("nan", "None", ""):
+                    name_dict[tc] = nm
+            with open(stock_names_json_path, "w", encoding="utf-8") as f:
+                json.dump(name_dict, f, ensure_ascii=False, indent=2)
+            logging.info(f"✅ 股票名称映射已落盘 {stock_names_json_path}（{len(name_dict)} 只）")
+        except Exception as e_json:
+            logging.warning("stock_names.json 落盘失败（不影响主流程）: %s", e_json)
+
         return True
     except Exception as e:
         logging.error(f"同步股票基础信息失败: {e}")
