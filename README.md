@@ -36,7 +36,7 @@ pip install tushare
 ### 第三步：首次配置（自动引导）
 
 ```bash
-python ui/app.py
+streamlit run ui/app.py
 ```
 
 > 首次运行会自动弹出配置向导，引导你填写：
@@ -51,7 +51,7 @@ python ui/app.py
 
 ```bash
 # 启动图形界面（Streamlit）
-python ui/app.py
+streamlit run ui/app.py
 
 # 或启动后台守护进程（7×24 自动推送）
 python auto_sniper_daemon.py
