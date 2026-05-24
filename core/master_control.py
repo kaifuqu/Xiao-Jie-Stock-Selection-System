@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 物理总控台跨进程状态（Streamlit UI ↔ auto_sniper_daemon）
+小杰AI选股系统 Pro V26.6 — 物理总控台跨进程状态（Streamlit UI ↔ auto_sniper_daemon）
 
 【性能优化 V2】
 1. TTL缓存：read_master_control() 添加 5 秒 TTL 内存缓存。

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 全市场秒级回测验证引擎（接口智能感知版）
+小杰AI选股系统 Pro V26.6 - 全市场秒级回测验证引擎（接口智能感知版）
 【终极修复】
 1. 智能接口适配：修复了部分引擎没有 run_all 方法导致的静默崩溃，加入 hasattr 智能感知。
 2. 引擎补全：强力注入 GoldenTenStrategies (金·共振引擎)，彻底修复共振战法无法回测的 Bug。
@@ -622,7 +622,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     python -m core.backtest_runner --mode=painpoint --legacy_mode=False --period=bluechip_accel
     """
     parser = argparse.ArgumentParser(
-        description="小杰AI选股系统 Pro V26.5 回测引擎 CLI（痛点专项已实现）"
+        description="小杰AI选股系统 Pro V26.6 回测引擎 CLI（痛点专项已实现）"
     )
     parser.add_argument(
         "--mode",

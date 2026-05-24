@@ -1,4 +1,4 @@
-# 小杰AI选股系统 Pro V26.5
+# 小杰AI选股系统 Pro V26.6
 
 利用完整数据和量化策略进行选股与企微推送。
 
@@ -33,13 +33,13 @@ pip install -r requirements.txt
 pip install tushare
 ```
 
-### 第三步：首次配置（自动引导）
+### 第三步：启动系统（首次运行会自动引导配置）
 
 ```bash
 streamlit run ui/app.py
 ```
 
-> 首次运行会自动弹出配置向导，引导你填写：
+> 首次运行时会自动弹出配置向导，引导你填写：
 >
 > - **Tushare Pro Token**（必填）：从 [tushare.pro](https://tushare.pro/register) 注册获取
 > - **DeepSeek API Key**（可选）：从 [platform.deepseek.com](https://platform.deepseek.com) 获取，用于 AI 分析
@@ -47,15 +47,7 @@ streamlit run ui/app.py
 
 配置自动保存到 `.env` 文件，后续运行无需再输入。
 
-### 第四步：启动系统
-
-```bash
-# 启动图形界面（Streamlit）
-streamlit run ui/app.py
-
-# 或启动后台守护进程（7×24 自动推送）
-python auto_sniper_daemon.py
-```
+> 后台守护进程（7×24 自动推送）请运行：`python auto_sniper_daemon.py`
 
 ---
 
@@ -120,3 +112,4 @@ WEIXIN_WEBHOOK_URL_SECONDARY=企微次Webhook地址
 - 数据来源：[Tushare](https://tushare.pro)
 - AI 分析：[DeepSeek](https://platform.deepseek.com)
 - 推送通知：企业微信自定义机器人
+- 如果对此系统有什么想法或问题交流，欢迎加入QQ群1090875939交流，备注：小杰选股

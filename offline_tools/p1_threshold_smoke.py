@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""小杰AI选股系统 Pro V26.5 - 一次性抽样：统计 P1 入池/拒绝对象分布（勿在业务中 import）。
+"""小杰AI选股系统 Pro V26.6 - 一次性抽样：统计 P1 入池/拒绝对象分布（勿在业务中 import）。
 P1 打分与 get_stock_data_qfq 一致：真实换手来自 turnover_rate_f 或 vol×close/circ_mv 反算，不读 total turnover_rate。
 """
 import os

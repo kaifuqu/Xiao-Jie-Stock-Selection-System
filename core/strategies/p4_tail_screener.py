@@ -2,8 +2,8 @@
 """
 小杰AI选股系统 Pro V26.7 — P4 尾盘选股池「物理胸甲」硬阈值筛选模块（建议运行窗口 14:30–15:00）
 ================================================================================
-【V26.5 资金口径】主力/特大单/机构净买门槛 = max(流通市值(元)×比例, 市值阶梯地板)，禁止单一绝对金额一刀切。
-【V26.5 换手口径】100% 使用真实自由换手 turnover_rate_f；缺失时用 vol(手)×close/circ_mv(万) 反算，禁止 turnover_rate。
+【V26.6 资金口径】主力/特大单/机构净买门槛 = max(流通市值(元)×比例, 市值阶梯地板)，禁止单一绝对金额一刀切。
+【V26.6 换手口径】100% 使用真实自由换手 turnover_rate_f；缺失时用 vol(手)×close/circ_mv(万) 反算，禁止 turnover_rate。
 
 【V26.7 核心优化】
 1. 流通市值下限强制提升至 100 亿(1,000,000 万元)，彻底封死袖珍盘漏洞。
@@ -11,7 +11,7 @@
    对 TuShare 日线 amt(千元)/vol(手) 量纲错位做双重校验，偏离昨收超过 20% 时降级到昨收价，
    防止"尾盘偷袭骗线否决"防线因量纲错误而失效。
 
-【V26.5 A股特殊场景处理】
+【V26.6 A股特殊场景处理】
 - 涨跌停宽容：涨跌停时量比萎缩/上影过长属于正常现象，涨跌停标记（_is_limit=UP/DOWN）由
   scan_engine._build_rt_entry 写入，各策略据此放宽否决条件。
 - 尾盘增量比基准优化：14:30之后用"尾盘前段(13:00-14:30)均量"作为基准，而非全日均量，
@@ -524,7 +524,7 @@ def _strategy_bald_bull(
 ) -> Tuple[bool, str]:
     is_limit = _is_limit_up(rt)
 
-    # 【BugFix V26.5】昨日涨幅必须从 df.iloc[-2] 读取，而非 df.iloc[-1]（当日）
+    # 【BugFix V26.6】昨日涨幅必须从 df.iloc[-2] 读取，而非 df.iloc[-1]（当日）
     y_prev = df.iloc[-2] if len(df) >= 2 else y
     y_prev_pct = _safe_float(y_prev.get("pct_chg"), 0.0)
     pct_high_prev = 9.5 if is_limit else cfg.s1_prev_pct_high
@@ -669,7 +669,7 @@ def _strategy_ma_shrink_dip(
     if not (ma5 > ma20 > ma60):
         return False, "非多头 ma5>ma20>ma60"
 
-    # 【BugFix V26.5】昨日涨幅从 df.iloc[-2] 读取（当日为 df.iloc[-1]）
+    # 【BugFix V26.6】昨日涨幅从 df.iloc[-2] 读取（当日为 df.iloc[-1]）
     y_prev = df.iloc[-2] if len(df) >= 2 else y
     y_prev_pct = _safe_float(y_prev.get("pct_chg"), 0.0)
     pct_high_prev = 9.5 if is_limit else cfg.s4_prev_pct_high
@@ -774,7 +774,7 @@ def _strategy_momentum_break(
     if not (ma5 > ma20 > ma60):
         return False, "非绝对多头 ma5>ma20>ma60"
 
-    # 【BugFix V26.5】昨日涨幅从 df.iloc[-2] 读取
+    # 【BugFix V26.6】昨日涨幅从 df.iloc[-2] 读取
     y_prev = df.iloc[-2] if len(df) >= 2 else y
     y_prev_pct = _safe_float(y_prev.get("pct_chg"), 0.0)
     pct_high_prev = 9.5 if is_limit else cfg.s6_momentum_prev_pct_high

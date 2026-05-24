@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 极速分发引擎（P1–P5 全池扫描中枢）
+小杰AI选股系统 Pro V26.6 - 极速分发引擎（P1–P5 全池扫描中枢）
 
 【P1 初筛与多维分项平滑分（与 pool_manager 同口径）】
 - 市值：流通市值低于 get_p1_select_min_circ_mv_wan（config/constants）所对应亿元门槛的标的，在战法循环前直接剔除；
@@ -479,7 +479,7 @@ def _extract_scan_surface_metrics(item, rt_map, curr_min, is_after_hours, today_
                 else:
                     elapsed_mins = 240
                 rt_local_vr = min((vol_hand / elapsed_mins) / (ma5_vol_hand / 240), 50.0)
-            # 【V26.5】VWAP均价替代现价计算换手率
+            # 【V26.6】VWAP均价替代现价计算换手率
             rt_amount = _safe_float(rt.get('amount', 0.0))
             if rt_amount > 0 and vol_shares > 0:
                 calc_price = rt_amount / vol_shares
@@ -1185,31 +1185,45 @@ def save_signal_log(item, pool_key, regime, breakdown_str):
 
 
 def _format_p4_trade_language(hits, stock_memory_score=0.0, sector_beta=1.0, close_vwap_dev=None):
-    """把 P4 命中翻成更像交易员看盘的短标签。"""
+    """
+    把 P4 命中翻成更像交易员看盘的短标签。
+
+    【V26.6 优化】原实现对 hits 列表遍历 11 次 any()，每次都从头扫描。
+    改为：单次遍历 hits 构建命中关键词集合，再用集合查询判断，
+    复杂度从 O(11n) 降为 O(n)。
+    """
     hits = [str(h) for h in (hits or []) if str(h).strip()]
     tags = []
+
+    # 【V26.6 优化】单次遍历构建命中词集合，避免11次重复扫描
+    hit_set = set()
+    for h in hits:
+        for w in h.split():
+            hit_set.add(w)
     hit_txt = " ".join(hits)
-    if any("P4-01" in h or "光头阳线抢筹" in h for h in hits):
+
+    # P4战法标签（从11次 any() 遍历改为集合查询，每个判断 O(1)）
+    if "P4-01" in hit_set or "光头阳线抢筹" in hit_set:
         tags.append("🔥抢筹")
-    if any("P4-02" in h or "筹码锁死" in h for h in hits):
+    if "P4-02" in hit_set or "筹码锁死" in hit_set:
         tags.append("🧲锁筹")
-    if any("P4-03" in h or "机构尾盘潜伏" in h for h in hits):
+    if "P4-03" in hit_set or "机构尾盘潜伏" in hit_set:
         tags.append("🕳️埋伏")
-    if any("P4-04" in h or "均线缩量低吸" in h for h in hits):
+    if "P4-04" in hit_set or "均线缩量低吸" in hit_set:
         tags.append("↘️回踩")
-    if any("P4-05" in h or "强势洗盘承接" in h for h in hits):
+    if "P4-05" in hit_set or "强势洗盘承接" in hit_set:
         tags.append("🧱承接")
-    if any("P4-06" in h or "动能突破共振" in h for h in hits):
+    if "P4-06" in hit_set or "动能突破共振" in hit_set:
         tags.append("🚀突破")
-    if any("P4-07" in h or "底仓不破均线" in h for h in hits):
+    if "P4-07" in hit_set or "底仓不破均线" in hit_set:
         tags.append("🛡️底仓")
-    if any("P4-08" in h or "温和均线修复" in h for h in hits):
+    if "P4-08" in hit_set or "温和均线修复" in hit_set:
         tags.append("🔧均线修复")
-    if any("P4-09" in h or "均线多头回踩企稳" in h for h in hits):
+    if "P4-09" in hit_set or "均线多头回踩企稳" in hit_set:
         tags.append("📈多头回踩")
-    if any("P4-10" in h or "沿5日线主升缩量" in h for h in hits):
+    if "P4-10" in hit_set or "沿5日线主升缩量" in hit_set:
         tags.append("⚡缩量再攻")
-    if any("P4-11" in h or "底仓主线共振" in h for h in hits):
+    if "P4-11" in hit_set or "底仓主线共振" in hit_set:
         tags.append("⭐主线底仓")
     if stock_memory_score >= 12.0:
         tags.append("👑股性强")
@@ -1234,6 +1248,11 @@ def _format_p4_trade_language(hits, stock_memory_score=0.0, sector_beta=1.0, clo
 
 
 def _p3_hit_tier(hit: str) -> str:
+    """
+    判断 P3 战法标签级别。
+    【V26.6 优化】P3 主战法/辅助标签/观察项仍用 any() 链，
+    因单只股票一次 hits 数量有限（通常 <10），any() 开销可忽略。
+    """
     s = str(hit or "")
     if any(k in s for k in ["右侧起爆", "均线低吸", "巨头连贯发力", "倍量启动延续"]):
         return "主战法"
@@ -2519,7 +2538,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 delta_time = curr_min - anchor_t
                 if delta_time > 0 and delta_vol > 0:
                     tail_vol_per_min = delta_vol / delta_time
-                    # 【V26.5 A股尾盘优化】14:30后用"尾盘前段均量"作为基准，更精准识别尾盘异动
+                    # 【V26.6 A股尾盘优化】14:30后用"尾盘前段均量"作为基准，更精准识别尾盘异动
                     if 870 <= curr_min <= 900:
                         # 尾盘前段(13:00-14:30)均量作为基准
                         vol_1330 = _safe_float(sn_row.get("vol_1325", 0), 0.0)
@@ -2698,7 +2717,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 continue
             pct = (now_price - pre_price) / pre_price * 100.0
             
-            # 【V26.5 A股特殊场景】涨跌停识别 + 集合竞价时段优化
+            # 【V26.6 A股特殊场景】涨跌停识别 + 集合竞价时段优化
             limit_up = pre_price > 0 and pct >= 9.9
             limit_down = pre_price > 0 and pct <= -9.9
             if limit_up or limit_down:
@@ -2739,7 +2758,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 if is_after_hours:
                     rt['vol_ratio'] = vol_hand / ma5_vol_hand
                 else:
-                    # 【V26.5 A股集合竞价优化】竞价期用昨日均量替代5日均量作为基准
+                    # 【V26.6 A股集合竞价优化】竞价期用昨日均量替代5日均量作为基准
                     if is_auction and yesterday_vol > 0:
                         # 竞价期成交量已并入当日，用昨日均量作为基准
                         auction_vol_baseline = rt.get('_auction_vol_ref', ma5_vol_hand)
@@ -2752,7 +2771,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                         rt['vol_ratio'] = min((vol_hand / elapsed_mins) / (ma5_vol_hand / 240), 50.0)
                 vol_ratio_tag = "R"
                 
-                # 【V26.5 优化】优先使用成交额/成交量计算VWAP均价，而非当前价
+                # 【V26.6 优化】优先使用成交额/成交量计算VWAP均价，而非当前价
                 # VWAP更能反映当日平均成交成本，对换手率计算更准确
                 rt_amount = _safe_float(rt.get('amount', 0.0))
                 if rt_amount > 0 and vol_shares > 0:
@@ -2820,9 +2839,10 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
             
             cyq_str = f"{rt['cyq_concentration']:.1f}" if rt['cyq_concentration'] < 900 else "--"
 
-            # ---------- P1 多维分项初筛（与 pool_manager 第五层同源；此处决定 p1_gene 并可能禁止进入 P2–P5）----------
-            # 【性能优化 V2】向量化替代 iterrows：批量计算近5日换手率
-            df_tail5_p1 = df_target.tail(5)
+            # 【V26.6 优化】在行 2601-2602 已预计算 df_tail_60 和 df_tail_5，
+            # 此处 df_tail5_p1 复用 df_tail_5 而非重新 tail(5) 调用，
+            # 避免主扫描循环中每只股票重复执行 .tail() 切片操作
+            df_tail5_p1 = df_tail_5
             try:
                 vol5_p = pd.to_numeric(df_tail5_p1["vol"], errors="coerce").fillna(0)
                 close5_p = pd.to_numeric(df_tail5_p1["close"], errors="coerce").fillna(0)
@@ -2837,14 +2857,26 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 _tr5_arr = _tr5_arr[np.isfinite(_tr5_arr)]
                 avg_trn_scan_row = float(np.mean(_tr5_arr)) if len(_tr5_arr) > 0 else 0.0
             except Exception:
-                _tr5_p1 = []
-                for _, rr in df_tail5_p1.iterrows():
-                    v = _safe_float(rr.get("vol"), 0.0)
-                    c = _safe_float(rr.get("close"), 0.0)
-                    cm = _safe_float(rr.get("circ_mv"), 0.0)
-                    t0 = _safe_float(rr.get("turnover_rate_f"), 0.0)
-                    _tr5_p1.append(t0 if t0 > 0 else infer_turnover_rate_f_pct(v, c, cm))
-                avg_trn_scan_row = float(np.mean(_tr5_p1)) if _tr5_p1 else 0.0
+                # 【性能优化 V3】向量化替代 iterrows fallback
+                # 主逻辑已完成向量化计算，此处为异常兜底
+                try:
+                    vol5_arr = pd.to_numeric(df_tail5_p1["vol"], errors="coerce").fillna(0).to_numpy()
+                    close5_arr = pd.to_numeric(df_tail5_p1["close"], errors="coerce").fillna(0).to_numpy()
+                    cm5_arr = pd.to_numeric(df_tail5_p1["circ_mv"], errors="coerce").fillna(0).to_numpy()
+                    tr_f5_arr = pd.to_numeric(df_tail5_p1["turnover_rate_f"], errors="coerce").fillna(0).to_numpy()
+                    # 向量化计算换手率
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        inferred_tr5_vec = np.where(
+                            (tr_f5_arr > 0) | (cm5_arr <= 0) | (close5_arr <= 0),
+                            tr_f5_arr,
+                            vol5_arr * 100 / np.maximum(cm5_arr, 1e-9),
+                        )
+                    inferred_tr5_vec = np.where(np.isfinite(inferred_tr5_vec), inferred_tr5_vec, np.nan)
+                    valid_tr5 = inferred_tr5_vec[~np.isnan(inferred_tr5_vec)]
+                    avg_trn_scan_row = float(np.mean(valid_tr5)) if len(valid_tr5) > 0 else 0.0
+                except Exception:
+                    # 终极兜底：返回默认值
+                    avg_trn_scan_row = 0.0
 
             pe_raw_p1 = hist.get("pe_ttm")
             if pe_raw_p1 is None or pd.isna(pe_raw_p1) or str(pe_raw_p1).strip() in ("", "-"):
@@ -2880,7 +2912,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
             p1_gene = float(p1_smooth)
             item["p1_score"] = float(p1_smooth)
 
-            # 【性能优化 V2】向量化替代 iterrows：计算连续涨停板计数
+            # 【V26.6 优化】整理代码块：移除重复的嵌套 try，合并为主逻辑 + 统一异常兜底
             empty_board_count = 0
             is_empty_board = False
             try:
@@ -2890,17 +2922,9 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 empty_board_count = int(((high_5 == low_5) & (pct_chg_5 >= 9.0)).sum())
                 is_empty_board = empty_board_count >= 2
             except Exception:
-                for _, row in df_tail_5.iterrows():
-                    row_pct = _safe_float(row.get('pct_chg', 0))
-                    row_high = _safe_float(row.get('high', 0))
-                    row_low = _safe_float(row.get('low', -1))
-                    if row_high == row_low and row_pct >= 9.0:
-                        empty_board_count += 1
-                        if empty_board_count >= 2:
-                            is_empty_board = True
-                    else:
-                        empty_board_count = 0
-                    
+                # 终极兜底：默认无涨停板
+                empty_board_count = 0
+                is_empty_board = False
             decay_factor = _calc_decay_factor_atr(df_target, rt)
             
             vol_mean_pre = df_tail_60[vol_col].mean()

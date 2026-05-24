@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 全局常量与阈值控制中心
+小杰AI选股系统 Pro V26.6 - 全局常量与阈值控制中心
 所有硬编码参数集中于此；版本号与全项目审查基线保持一致。
 
 【V26 数据底座】capital_resonance_score 算法见 data/capital_resonance_features.py
@@ -16,7 +16,7 @@
 import os
 
 # 全项目统一版本标识（审计 / UI / 日志）
-APP_VERSION = "V26.5"
+APP_VERSION = "V26.6"
 
 # ==================== 0. 档位命名统一 ====================
 POOL_NAME_CN = {
@@ -86,7 +86,7 @@ LEFT_SIDE = {
     'elg_boll_touch': 1500       
 }
 
-# ==================== 市场状态自适应参数（V26.5 沿用）====================
+# ==================== 市场状态自适应参数（V26.6 沿用）====================
 REGIME_PARAMS = {
     "趋势市": {"filter_mult": 0.85, "base_pos": 40, "hold_days": 8, "allow_direct_chase": True},
     "震荡市": {"filter_mult": 1.0, "base_pos": 30, "hold_days": 5, "allow_direct_chase": False},
@@ -96,7 +96,7 @@ REGIME_PARAMS = {
 # 日志表名称
 LOG_TABLE = "signal_log"
 
-# ==================== 7. P1 资金共振 / 股性记忆（V26.5）====================
+# ==================== 7. P1 资金共振 / 股性记忆（V26.6）====================
 # P1 主池/观察池「排序键」中与日线 capital_resonance_score 的融合权重（与 pool_manager._p1_final_sort_key 一致）
 CAPITAL_RESONANCE_WEIGHT_P1 = 0.18
 # P3–P5：calculate_dynamic_score 中对 crs_ui（0~100）的线性加分系数（与 P1 的 18% 排序权重区分）

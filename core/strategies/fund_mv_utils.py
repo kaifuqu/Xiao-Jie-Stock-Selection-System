@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 流通市值锚定资金门槛 + 真实换手率（turnover_rate_f）统一工具
+小杰AI选股系统 Pro V26.6 — 流通市值锚定资金门槛 + 真实换手率（turnover_rate_f）统一工具
 
 【口径约定】
 - circ_mv（TuShare daily_basic / 本项目库）：**万元**
@@ -401,7 +401,7 @@ def vector_nm_fly_negative_threshold(circ_mv_wan: pd.Series, ratio: float) -> pd
 
 def adaptive_turnover_f_range(circ_mv_wan: Union[float, pd.Series], base_low: float, base_high: float) -> Tuple[Union[float, pd.Series], Union[float, pd.Series]]:
     """
-    【V26.5 A股换手率自适应】根据流通市值动态调整换手率合理区间。
+    【V26.6 A股换手率自适应】根据流通市值动态调整换手率合理区间。
     A股不同市值级别股票的换手率差异巨大：
     - 大盘蓝筹（>=500亿）：0.3%~2%
     - 中盘成长（100亿~500亿）：0.5%~4%

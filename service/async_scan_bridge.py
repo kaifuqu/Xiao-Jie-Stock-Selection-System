@@ -392,7 +392,7 @@ def submit_p3_p4_scan_job(
     wechat_notify: bool,
 ) -> Optional[str]:
     """
-    【V26.5 架构废弃/封印】当前生产环境已剥离内嵌 Worker，调用此函数将触发异常拦截。
+    【V26.6 架构废弃/封印】当前生产环境已剥离内嵌 Worker，调用此函数将触发异常拦截。
 
     提交仅含 p3/p4 的扫描任务。若已有 running.json 则返回 None（避免并发双跑）。
     返回 job_id 供 UI 与 status / result 对齐。
@@ -649,7 +649,7 @@ def _background_worker_loop() -> None:
 
 def ensure_async_scan_worker_started() -> None:
     """
-    【V26.5 架构废弃/封印】当前生产环境已剥离内嵌 Worker，调用此函数将触发异常拦截。
+    【V26.6 架构废弃/封印】当前生产环境已剥离内嵌 Worker，调用此函数将触发异常拦截。
 
     在 Streamlit 进程内启动唯一 Daemon 线程（幂等）。
     若 config/环境要求外部 auto_sniper_daemon 独占 pending.json，则直接跳过，避免双进程抢队列。

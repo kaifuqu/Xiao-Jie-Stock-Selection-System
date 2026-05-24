@@ -22,12 +22,23 @@ _logger = logging.getLogger(__name__)
 
 
 def _ds_safe_float(val: Any, default: float = 0.0) -> float:
-    """标量安全转 float：非有限数、脏字符串一律回退 default，避免止损比较时出现 nan 污染。"""
+    """
+    标量安全转 float：非有限数、脏字符串一律回退 default。
+    【V26.6 优化】添加 float/int 的 isinstance 快速路径，
+    避免对已经是数值类型的值也走 pd.to_numeric 构造路径。
+    """
+    # 【V26.6 优化】快速通道：Python 内置数值类型直接返回
+    if isinstance(val, (int, float)):
+        x = float(val)
+        if x != x or x in (float("inf"), float("-inf")):
+            return float(default)
+        return x
+    # 兜底：对字符串等其他类型走 pd.to_numeric 路径
     try:
         x = float(pd.to_numeric(val, errors="coerce"))
         if x != x or x in (float("inf"), float("-inf")):
             return float(default)
-        return float(x)
+        return x
     except Exception:
         return float(default)
 

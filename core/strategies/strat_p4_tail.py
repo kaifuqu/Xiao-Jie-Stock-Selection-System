@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - P4 尾盘战法引擎（核心六战法版）
+小杰AI选股系统 Pro V26.6 - P4 尾盘战法引擎（核心六战法版）
 【架构】
 1. 硬阈值筛选在 p4_tail_screener.py；本类负责打分与外资辅助标签。
 2. P5 盘后已独立为 strat_p5_postmarket.P5Postmarket；scan_engine 仅对 p4 调用本引擎。
@@ -107,7 +107,7 @@ def _safe_vwap_from_rt(rt, ref_price, fallback_price):
 class P4Tail:
     def __init__(self, screener_cfg=None, risk_cfg: Optional[RiskControlConfig] = None):
         self.name = "P4尾盘智能引擎"
-        self.version = "V26.5_Core6Strategies_Reindexed_VwapBetaMemory"
+        self.version = "V26.6_Core6Strategies_Reindexed_VwapBetaMemory"
         self.db_cache = {}
         self._cfg_lock_external = screener_cfg is not None
         self._cfg = screener_cfg if screener_cfg is not None else get_p4_tail_screener_config()
@@ -175,15 +175,27 @@ class P4Tail:
                 _tr3_arr = _tr3_arr[np.isfinite(_tr3_arr)]
                 avg_tr3 = float(np.mean(_tr3_arr)) if len(_tr3_arr) > 0 else 0.0
                 turnover_shrink = avg_tr3 < 3.0
+            # 【性能优化 V3】向量化替代 iterrows fallback
+            # 主逻辑已完成向量化计算，此处为异常兜底
+            try:
+                vol3_arr = pd.to_numeric(df_tail3["vol"], errors="coerce").fillna(0).to_numpy()
+                close3_arr = pd.to_numeric(df_tail3["close"], errors="coerce").fillna(0).to_numpy()
+                cm3_arr = pd.to_numeric(df_tail3["circ_mv"], errors="coerce").fillna(0).to_numpy()
+                tr_f3_arr = pd.to_numeric(df_tail3["turnover_rate_f"], errors="coerce").fillna(0).to_numpy()
+                # 向量化计算近3日换手率
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    inferred_tr3_vec = np.where(
+                        (tr_f3_arr > 0) | (cm3_arr <= 0) | (close3_arr <= 0),
+                        tr_f3_arr,
+                        vol3_arr * 100 / np.maximum(cm3_arr, 1e-9),
+                    )
+                inferred_tr3_vec = np.where(np.isfinite(inferred_tr3_vec), inferred_tr3_vec, np.nan)
+                valid_tr3 = inferred_tr3_vec[~np.isnan(inferred_tr3_vec)]
+                avg_tr3 = float(np.mean(valid_tr3)) if len(valid_tr3) > 0 else 0.0
+                turnover_shrink = avg_tr3 < 3.0
             except Exception:
-                tr_list = []
-                for _, r in df_tail3.iterrows():
-                    v = float(r.get("vol", 0) or 0)
-                    c = float(r.get("close", 0) or 0)
-                    cm = float(r.get("circ_mv", 0) or 0)
-                    tr0 = float(r.get("turnover_rate_f", 0) or 0)
-                    tr_list.append(tr0 if tr0 > 0 else infer_turnover_rate_f_pct(v, c, cm))
-                turnover_shrink = float(np.mean(tr_list)) < 3.0 if tr_list else False
+                # 终极兜底：返回默认值
+                turnover_shrink = False
             macd_strong = float(curr.get("macd_diff", 0.0)) > float(curr.get("macd_dea", 0.0))
             if not macd_strong and "macd" in curr.index and "macd_signal" in curr.index:
                 macd_strong = float(curr.get("macd", 0.0)) > float(curr.get("macd_signal", 0.0))
@@ -700,7 +712,7 @@ class P4Tail:
                 board_bonus = -3.0
                 res["risk_tags"].append("🧊[冷板块折价]")
 
-            # 【V26.5 优化】盘尾滞后数据警告：hk_vol / net_main_amount / inst_net_buy 均为昨日结算数据
+            # 【V26.6 优化】盘尾滞后数据警告：hk_vol / net_main_amount / inst_net_buy 均为昨日结算数据
             hk_note = ev.get("detail", {}).get("hk_vol_data_note", "")
             if hk_note and "昨" in hk_note:
                 res["risk_tags"].append(f"📡[数据延迟]{hk_note}")

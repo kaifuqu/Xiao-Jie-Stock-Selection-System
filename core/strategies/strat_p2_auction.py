@@ -2,7 +2,7 @@
 
 """
 
-小杰AI选股系统 Pro V26.5 - P2 竞价战法池（物理胸甲四策略版）
+小杰AI选股系统 Pro V26.6 - P2 竞价战法池（物理胸甲四策略版）
 
 【架构说明】
 
@@ -98,7 +98,7 @@ class P2Auction:
 
         self.name = "P2竞价引擎"
 
-        self.version = "V26.5_PhysicalArmor_4Strategies"
+        self.version = "V26.6_PhysicalArmor_4Strategies"
 
         self._cfg_lock_external = screener_cfg is not None
 
@@ -636,7 +636,7 @@ class P2Auction:
             hits.append("✈️[外资辅助]")
 
 
-        # 【V26.5 优化】hk_vol / net_main_amount / inst_net_buy 为日线结算数据，竞价显示"昨"标注
+        # 【V26.6 优化】hk_vol / net_main_amount / inst_net_buy 为日线结算数据，竞价显示"昨"标注
         hk_note = ev.get("detail", {}).get("hk_vol_data_note", "")
         if hk_note and "昨" in hk_note:
             res["risk_tags"].append(f"📡[数据延迟]{hk_note}")

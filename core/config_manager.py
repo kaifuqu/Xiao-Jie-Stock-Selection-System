@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 策略参数统一入口：从项目根 config.yaml 的 strategies: 读取，
+小杰AI选股系统 Pro V26.6 — 策略参数统一入口：从项目根 config.yaml 的 strategies: 读取，
 并合并 Streamlit 会话中的「策略实验室」覆写（无需重启）。
 
 说明：

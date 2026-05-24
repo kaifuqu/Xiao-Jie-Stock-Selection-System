@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 真理测谎仪（机构级抗过拟合盲测版）
+小杰AI选股系统 Pro V26.6 - 真理测谎仪（机构级抗过拟合盲测版）
 【核心升级】：
 1. 🧪 OOS盲测机制：按时间严格切分 IS(前70%) 与 OOS(后30%)，杜绝样本泄漏与回看偏差。
 2. 🧠 网格先训后测：所有参数仅在 IS 训练；仅保留 IS>60% 且样本>=10 的候选进入 OOS 盲测。
@@ -92,7 +92,7 @@ def _cs_zscore(x: pd.Series) -> pd.Series:
 
 def setup_environment():
     print("="*90)
-    print(" 🚀 [1/5] V26.5 终极测谎仪启动 (10万倍火力全开网格版)...")
+    print(" 🚀 [1/5] V26.6 终极测谎仪启动 (10万倍火力全开网格版)...")
     current_dir = os.path.dirname(os.path.abspath(__file__))
     _bn = os.path.basename(current_dir)
     project_root = (

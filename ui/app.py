@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 实盘指挥舱（单页大屏；策略实验室已迁移至项目根 `run_lab.py` 独立进程）。
+小杰AI选股系统 Pro V26.6 实盘指挥舱（单页大屏；策略实验室已迁移至项目根 `run_lab.py` 独立进程）。
 本页不启动任何后台调度器或 Streamlit 异步轮询；P2–P5 扫描为点击后同步执行 `run_scan_engine`，定时任务请用外部守护进程。
 【UI版面功能】：
 1. 🐉 P5 真龙池：全面扩充出第 5 个盘后验证专池，在视觉和物理内存上与 P4 盘中彻底分离。
@@ -69,7 +69,7 @@ try:
 except ImportError:
 
     class _ConstShim:
-        APP_VERSION = "V26.5"
+        APP_VERSION = "V26.6"
 
     constants = _ConstShim()
 
@@ -142,7 +142,7 @@ def _ui_cached_distinct_ts_codes_latest_trade_date() -> tuple[str, ...]:
 
 
 st.set_page_config(
-    page_title=f"小杰AI选股系统 Pro V26.5 {constants.APP_VERSION}",
+    page_title=f"小杰AI选股系统 Pro V26.6 {constants.APP_VERSION}",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -2080,12 +2080,37 @@ if _mcs_ui > 0 or _sc_ui > 0:
     _p1_shrink_col_txt = f"收缩度{_mcs_ui:.2f}｜样本{_sc_ui}"
 else:
     _p1_shrink_col_txt = "--"
-if active_items:
-    for item in active_items:
-        hist = item.get('hist', {})
-        code = item.get('code', '')
-        s_code = str(code).split('.')[0][:6]
-        name = normalize_stock_display_name(hist.get("name", s_code))
+    # 【V26.6 优化】在循环外批量构建 active_items 字典映射，O(1) 查找替代 O(n) 线性搜索
+    # 底仓有数百只时，原 `next((x for x in active_items if ...))` 线性搜索
+    # 对 P2/P3/P4/P5 四个池 × 每池 20 行 = 约 16000 次字符串匹配
+    _active_base_dict = {}
+    for _base_item in active_items:
+        _bc = str(_base_item.get('code', '')).split('.')[0][:6]
+        if _bc and _bc not in _active_base_dict:
+            _active_base_dict[_bc] = _base_item
+
+    # 【V26.6 优化】批量获取行业信息到 session_state 缓存，避免每行重复查询数据库
+    _industry_cache_key = "_industry_name_cache"
+    _industry_cache: dict = st.session_state.get(_industry_cache_key, {})
+    _active_codes_need_industry = [
+        str(x.get('code', '')).split('.')[0][:6]
+        for x in active_items
+        if x.get('code') and (str(x.get('code', '')).split('.')[0][:6] not in _industry_cache)
+    ]
+    if _active_codes_need_industry:
+        # 从 DuckDB 批量查询（利用 get_stock_industry 的内部 IN 查询）
+        for _cd in _active_codes_need_industry:
+            _ind = get_stock_industry(_cd)
+            if _ind and _ind != "--":
+                _industry_cache[_cd] = _ind
+        st.session_state[_industry_cache_key] = _industry_cache
+
+    if active_items:
+        for item in active_items:
+            hist = item.get('hist', {})
+            code = item.get('code', '')
+            s_code = str(code).split('.')[0][:6]
+            name = normalize_stock_display_name(hist.get("name", s_code))
         
         db_close_p = _safe_float(hist.get('close', 0.0), 0.0)
         # 与 scan_engine 一致：日线 pre_close → close，禁止默认 1 元伪造涨跌幅
@@ -2136,7 +2161,7 @@ if active_items:
             "涨幅": f"{pct:.2f}%",  
             "量比": f"{vr_val:.1f}({vr_tag})", 
             "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%", 
-            "行业": get_stock_industry(code), 
+            "行业": _industry_cache.get(s_code, "--"), 
             "股性": f"{size_emoji}{size_label}", 
             "建议仓位": pos_advice, 
             "纪律防线": stop_loss,
@@ -2182,7 +2207,7 @@ if st.session_state.get("pool_view_mode") == "main_plus_obs":
             "涨幅": f"{pct:.2f}%",
             "量比": f"{vr_val:.1f}({vr_tag})",
             "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%",
-            "行业": get_stock_industry(code),
+            "行业": _industry_cache.get(s_code, "--"),
             "股性": f"{size_emoji}{size_label}",
             "建议仓位": "⚠️ 高风险备选·仅供观察 | 单票≤8%",
             "纪律防线": "观察池：仅供观察，勿重仓",
@@ -2232,7 +2257,11 @@ def enhance_pool_data(pool_data):
         if "操盘提示" not in row:
             row["操盘提示"] = "--"
         s_code = str(row.get("代码", ""))
-        match = next((x for x in active_items if str(x.get('code','')).startswith(s_code)), None)
+        # 【V26.6 优化】O(1) dict 查找替代 O(n) 线性搜索
+        # 原代码：`match = next((x for x in active_items if str(x.get('code','')).startswith(s_code)), None)`
+        # 对 P2/P3/P4/P5 各 20 行 × 底仓 200 只 = 约 16000 次字符串前缀匹配
+        # 改为预建字典后 O(1) 查找
+        match = _active_base_dict.get(s_code)
         if match:
             hist = match.get('hist', {})
             if not isinstance(hist, dict):
@@ -2291,8 +2320,19 @@ for _pd in (p2_data, p3_data, p4_data, p5_data):
 
 if _all_codes:
     try:
-        from data.api_fetcher import fetch_realtime_batch as _fetch_rt
-        _rt_map = _fetch_rt(_all_codes)
+        # 【V26.6 优化】使用 session_state 缓存实时名称映射，30秒内不重复调用 API
+        # Streamlit 每次页面交互都会重新执行脚本，若无缓存每次都调用 fetch_realtime_batch
+        # 改为带 TTL 的 session_state 缓存，避免页面刷新/交互时重复拉取相同数据
+        _rt_cache_key = "_p2p5_rt_cache"
+        _rt_cached: dict = st.session_state.get(_rt_cache_key, {})
+        _rt_ts = st.session_state.get(f"{_rt_cache_key}_ts", 0.0)
+        _now_ts = time.time()
+        if not _rt_cached or (_now_ts - _rt_ts) > 30.0:
+            from data.api_fetcher import fetch_realtime_batch as _fetch_rt
+            _rt_cached = _fetch_rt(_all_codes) or {}
+            st.session_state[_rt_cache_key] = _rt_cached
+            st.session_state[f"{_rt_cache_key}_ts"] = _now_ts
+        _rt_map = _rt_cached
         for _pd in (p2_data, p3_data, p4_data, p5_data):
             for _row in _pd:
                 _c = str(_row.get("代码", "")).strip()

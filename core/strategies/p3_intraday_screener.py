@@ -146,10 +146,10 @@ class P3IntradayScreenerConfig:
     s1_pct_high: float = 6.0
     s1_vol_ma5_mult: float = 1.5
     s1_winner_min: float = 85.0
-    # 【V26.5 新增】P3-01 昨日涨幅区间(涨跌停时放宽到9.5%)
+    # 【V26.6 新增】P3-01 昨日涨幅区间(涨跌停时放宽到9.5%)
     s1_prev_pct_low: float = 3.0
     s1_prev_pct_high: float = 6.0
-    # 【V26.5 新增】P3-01 ATR上限防飞刀
+    # 【V26.6 新增】P3-01 ATR上限防飞刀
     s1_atr_pct_max: float = 8.0
 
     # ---------- 策略二 ----------
@@ -169,10 +169,10 @@ class P3IntradayScreenerConfig:
     s3_pct_high: float = 5.0
     s3_vol_ratio_min: float = 1.5
     s3_rsi_fly: float = 80.0
-    # 【V26.5 新增】P3-03 昨日涨幅区间(涨跌停时放宽)
+    # 【V26.6 新增】P3-03 昨日涨幅区间(涨跌停时放宽)
     s3_prev_pct_low: float = 3.0
     s3_prev_pct_high: float = 6.0
-    # 【V26.5 新增】P3-03 长上影容忍(涨停日上影正常存在)
+    # 【V26.6 新增】P3-03 长上影容忍(涨停日上影正常存在)
     s3_upper_shadow_max_pct: float = 2.5
 
     # ---------- 策略四 ----------
@@ -184,7 +184,7 @@ class P3IntradayScreenerConfig:
     s5_vol_ratio_min: float = 1.8
     s5_cost50_mult: float = 1.05
     s5_atr_fly_max: float = 6.0
-    # 【V26.5 新增】P3-05 MA20斜率下限(须有上攻动能)
+    # 【V26.6 新增】P3-05 MA20斜率下限(须有上攻动能)
     s5_ma20_slope_min: float = 0.5
 
     # ---------- 策略六 ----------
@@ -192,7 +192,7 @@ class P3IntradayScreenerConfig:
     s6_pct_high: float = 5.0
     s6_winner_min: float = 80.0
     s6_bias_fly: float = 10.0
-    # 【V26.5 新增】P3-06 ATR上限防飞刀
+    # 【V26.6 新增】P3-06 ATR上限防飞刀
     s6_atr_pct_max: float = 8.0
 
     # ---------- 策略七 ----------
@@ -212,7 +212,7 @@ class P3IntradayScreenerConfig:
     s8_winner_min: float = 78.0
     s8_ma20_slope_min: float = 0.15
     s8_yang_body_min: float = 0.998
-    # 【V26.5 新增】P3-08 昨日涨幅区间(涨跌停时放宽)
+    # 【V26.6 新增】P3-08 昨日涨幅区间(涨跌停时放宽)
     s8_prev_pct_low: float = 3.0
     s8_prev_pct_high: float = 6.0
 

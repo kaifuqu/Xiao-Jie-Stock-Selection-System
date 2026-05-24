@@ -1,7 +1,7 @@
 content = """@echo off
 REM start_daemon_24x7.bat - ASCII REM only for cmd.exe compatibility on Chinese Windows.
 REM 7x24 daemon watchdog (daemon-only, no UI). Auto-restarts on crash with 60s back-off.
-REM Version: 小杰AI选股系统 Pro V26.5
+REM Version: 小杰AI选股系统 Pro V26.6
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -30,7 +30,7 @@ set "PYTHONUNBUFFERED=1"
 
 echo.
 echo ============================================================
-echo  [小杰AI选股系统 Pro V26.5] 7x24 后台看门狗已启动
+echo  [小杰AI选股系统 Pro V26.6] 7x24 后台看门狗已启动
 echo ============================================================
 echo  Log file  : data\\runtime\\sniper.log
 echo  Config    : see core\\log_config.py for rotation settings

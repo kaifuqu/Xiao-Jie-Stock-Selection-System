@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 高并发异步行情中枢（仅实时快照，不承担历史全量下载）
+小杰AI选股系统 Pro V26.6 - 高并发异步行情中枢（仅实时快照，不承担历史全量下载）
 【能力】aiohttp 多源容灾、fetch_realtime_batch 同步包装供 scan_engine / UI 调用。
 【稳定性】单次 HTTP 指数退避 + 抖动；超时/断连/429 可重试；单 chunk 失败不拖垮全批。
 """
@@ -232,7 +232,7 @@ async def _fetch_sina_chunk(session, chunk, semaphore):
 
 async def _fetch_realtime_batch_async(codes):
     """
-    【V26.5 数据源并行+字段合并优化】
+    【V26.6 数据源并行+字段合并优化】
     - 三源（东财/腾讯/新浪）全部并行发起请求，总耗时由最慢源决定
     - 东财优先：price/volume/pre_close/open/high/low/amount
     - 腾讯补充：vol_ratio / turnover_rate_f（东财不提供这两个字段）

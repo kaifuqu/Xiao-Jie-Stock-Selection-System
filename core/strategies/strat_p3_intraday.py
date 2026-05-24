@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - P3 盘中战法池（物理胸甲八大策略 + 热成像增强版）
+小杰AI选股系统 Pro V26.6 - P3 盘中战法池（物理胸甲八大策略 + 热成像增强版）
 【架构】
 1. 硬阈值筛选集中在 p3_intraday_screener.py（全局否决 + 八大客观策略），单次 O(1) 尾部访问。
 2. 本类负责：盘口组装、日内风控惩罚（VWAP/上影/早盘量比）、DuckDB Z-Score 附录、爆发分合成。
@@ -630,7 +630,7 @@ class P3Intraday:
                 res["risk_tags"].append("👀【观察】缩量分歧低吸")
             if any("质量趋势底仓" in h for h in obs_hits):
                 res["risk_tags"].append("👀【观察】质量趋势底仓")
-            # 【V26.5 优化】盘中滞后数据警告：hk_vol / net_main_amount / inst_net_buy 均为昨日结算数据
+            # 【V26.6 优化】盘中滞后数据警告：hk_vol / net_main_amount / inst_net_buy 均为昨日结算数据
             hk_note = ev.get("detail", {}).get("hk_vol_data_note", "")
             if hk_note and "昨" in hk_note:
                 res["risk_tags"].append(f"📡[数据延迟]{hk_note}")

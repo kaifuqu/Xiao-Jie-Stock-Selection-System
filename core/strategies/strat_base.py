@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 动态打分与策略基类（CSM 双核 + 黄金门禁路由）
-【V26.5 新增资金记忆体系】fund_memory_score 在 P1 路径由 score_calibration 按权重可选融合；本模块战法链仍不直接读该列。
-【V26.5 第一阶段】资金共振 composite：P3–P5 路径下 crs_ui 以 constants.CAPITAL_RESONANCE_WEIGHT_P345（默认 8%）线性注入动态分（P1 初筛不使用该列）。
+小杰AI选股系统 Pro V26.6 - 动态打分与策略基类（CSM 双核 + 黄金门禁路由）
+【V26.6 新增资金记忆体系】fund_memory_score 在 P1 路径由 score_calibration 按权重可选融合；本模块战法链仍不直接读该列。
+【V26.6 第一阶段】资金共振 composite：P3–P5 路径下 crs_ui 以 constants.CAPITAL_RESONANCE_WEIGHT_P345（默认 8%）线性注入动态分（P1 初筛不使用该列）。
 【要点】
 1. strict_golden_burst_ok 按 pool_key 固定分支，避免仅靠系统时钟误伤 P2–P5。
 2. P4 使用 tail_vol_ratio 等尾盘特征；P5 使用全日定档条件，与 tail_vol_ratio 脱钩。
@@ -286,7 +286,7 @@ def strict_golden_burst_ok(df, rt, pool_key=None):
 
         # ---------------------------------------------------------
         # 兼容旧路径：未提供 pool_key 时，仍按当前时钟自动分阶段
-        # 【V26.5 A股时段精细化】
+        # 【V26.6 A股时段精细化】
         #   Stage1 09:30-09:45 早盘确认期（排除竞价虚假繁荣）
         #   Stage2 09:45-10:30 强势股趋势确立
         #   Stage3 10:30-14:00 主力控盘/洗盘期（含10:30第二波识别）

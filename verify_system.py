@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 轻量级系统自检（DuckDB、异步扫描目录权限等）
+小杰AI选股系统 Pro V26.6 — 轻量级系统自检（DuckDB、异步扫描目录权限等）
 【V26 数据底座验收】
 - capital_resonance_score：最新交易日截面上，流通市值 ≥100 亿（与 constants.DAILY_BASIC_MIN_MV_WAN 一致）
   的活跃标的中，非零有效分占比须 ≥85%。
@@ -305,7 +305,7 @@ def check_regime_analyzer_call() -> bool:
 
 def check_capital_resonance_coverage() -> bool:
     """
-    【V26.5 新增资金记忆体系】与 fund_memory 列校验并列；特征均由 data_fetcher._sync_daily_features() 维护。
+    【V26.6 新增资金记忆体系】与 fund_memory 列校验并列；特征均由 data_fetcher._sync_daily_features() 维护。
 
     分母为「活跃标的」：最新交易日 circ_mv ≥ constants.DAILY_BASIC_MIN_MV_WAN（默认 100 亿市值门槛，万元口径），
     与日线下载候选及资金记忆双重过滤的规模闸对齐。分子为其中 capital_resonance_score 非零有效的行数；占比须 ≥85%。
@@ -465,7 +465,7 @@ def _pragma_col_type(df, col_name: str) -> str:
 
 def check_fund_memory_score_column() -> bool:
     """
-    【V26.5 新增资金记忆体系】结构验收：列 fund_memory_score 存在，且 PRAGMA 声明为浮点存储。
+    【V26.6 新增资金记忆体系】结构验收：列 fund_memory_score 存在，且 PRAGMA 声明为浮点存储。
     不做数值全表覆盖率（记忆分为稀疏事件驱动）；算法见 data/fund_memory_score.py。
     """
     cfg_path = os.path.join(_root(), "config.yaml")
@@ -525,7 +525,7 @@ def check_fund_memory_score_column() -> bool:
         return False
 
     _ok(
-        f"{source_table} 已包含 fund_memory_score 列且类型为浮点（V26.5 新增资金记忆体系）"
+        f"{source_table} 已包含 fund_memory_score 列且类型为浮点（V26.6 新增资金记忆体系）"
     )
     return True
 
@@ -558,7 +558,7 @@ def check_filelock_installed() -> bool:
 def main() -> int:
     os.chdir(_root())
     _ensure_utf8_stdout()
-    print("小杰AI选股系统 Pro V26.5 — verify_system.py")
+    print("小杰AI选股系统 Pro V26.6 — verify_system.py")
     print("项目根:", _root())
     print("-" * 60)
     all_ok = True

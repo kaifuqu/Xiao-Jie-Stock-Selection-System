@@ -2,9 +2,9 @@
 """
 资金共振复合分（capital_resonance_score，0~100）
 
-【V26.5 第一阶段·特征引擎】本列仍为 daily_data 中的单一 DOUBLE 列，**不增删表结构**；
+【V26.6 第一阶段·特征引擎】本列仍为 daily_data 中的单一 DOUBLE 列，**不增删表结构**；
 仅变更向量化算法口径，与增量管道 _sync_daily_features_capital_resonance 配套。
-【V26.5 新增资金记忆体系】与 fund_memory_score 并列，由 data_fetcher 夜间增量 `_sync_daily_features()` 同序维护；二者独立算法。P3–P5 动态分可加权本列；P1 底仓平滑分不读此列作硬闸。
+【V26.6 新增资金记忆体系】与 fund_memory_score 并列，由 data_fetcher 夜间增量 `_sync_daily_features()` 同序维护；二者独立算法。P3–P5 动态分可加权本列；P1 底仓平滑分不读此列作硬闸。
 
 设计总览（算术可加、可解释，禁止 Python 层按行 for 循环）：
 - **固定底座 80 分** = 筹码单峰底座 50 分 + 主力资金底座 30 分。
@@ -87,7 +87,7 @@ def compute_capital_resonance_score(
     必需/常用列：cyq_concentration, net_main_amount, circ_mv, rzmre（可缺则两融加分全 0）。
 
     输出：与 df.index 对齐的 float64 Series，取值 [0, 100]。
-    【V26.5 新增资金记忆体系】与股性记忆列独立；本函数不读取 fund_memory_score。
+    【V26.6 新增资金记忆体系】与股性记忆列独立；本函数不读取 fund_memory_score。
     """
     if df is None or df.empty:
         return pd.Series(dtype="float64")

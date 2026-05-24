@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 策略实验记录 DuckDB 访问层
+小杰AI选股系统 Pro V26.6 - 策略实验记录 DuckDB 访问层
 
 【设计说明】
 - 主行情库由 data.db_core 管理（quant_data.duckdb）；实验记录单独落在 data/experiments.duckdb，

@@ -16,33 +16,61 @@ from core.stock_name_utils import normalize_stock_display_name
 
 
 def json_sanitize_scalar(v: Any) -> Any:
+    """
+    【V26.6 优化】将 `try: json.dumps(v) / except` 类型检测
+    改为纯 isinstance 判断，避免对每个标量值都执行完整的 JSON 序列化。
+
+    原实现：对每个值都调用 json.dumps(v) 做类型检测，当 hist 字段有 100+ 键时
+    开销显著（每次 json.dumps 都创建 JSON 编码器）。改为 isinstance 判断
+    后，常见数值/字符串类型直接返回，无需序列化。
+
+    auto_sniper_daemon.py 已实现了类似的优化方案 _is_json_serializable_type，
+    此处将相同思路回移植到 session_cache 模块。
+    """
+    # numpy 整数类型（优先检测，避免 isinstances 链式判断）
     if isinstance(v, (np.integer, np.int64, np.int32)):
         return int(v)
+    # numpy 浮点类型
     if isinstance(v, (np.floating, np.float64, np.float32)):
         fv = float(v)
-        if fv != fv:
+        # NaN 检测：float('nan') != float('nan')
+        if fv != fv:   # NaN 比较永远为 False
             return None
         return fv
+    # numpy 布尔
     if isinstance(v, np.bool_):
         return bool(v)
+    # None 值
     if v is None:
         return None
+    # pandas NA
     if isinstance(v, float) and pd.isna(v):
         return None
+    # pandas Timestamp
     if isinstance(v, pd.Timestamp):
         return v.isoformat()
+    # numpy datetime64
     if isinstance(v, np.datetime64):
         try:
             return str(pd.Timestamp(v))
         except Exception:
             return str(v)
+    # bytes / bytearray
     if isinstance(v, (bytes, bytearray)):
         return bytes(v).decode("utf-8", errors="replace")
+    # Python 内置标量（无需 JSON 序列化检测）
+    if isinstance(v, (bool, int, float, str)):
+        return v
+    # dict / list / tuple：走 json_safe_dict 处理
+    if isinstance(v, (dict, list, tuple)):
+        # 由调用方 json_safe_dict 处理，这里不应到达
+        return v
+    # 其余复杂对象：尝试返回字符串化表示
     try:
-        json.dumps(v)
+        json.dumps(v)  # 仍保留此检测作为最后防线（针对自定义类实例）
+        return v
     except (TypeError, ValueError):
         return str(v)
-    return v
 
 
 def json_safe_dict(d: Any) -> Dict[str, Any]:

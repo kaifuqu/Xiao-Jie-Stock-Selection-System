@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 综合分稳定化工具（截面 Rank + 对数饱和 + 爆发压制）
+小杰AI选股系统 Pro V26.6 — 综合分稳定化工具（截面 Rank + 对数饱和 + 爆发压制）
 + P1 底仓多维分项平滑插值（实盘验证口径，不读写 DuckDB 表结构）
 
 【设计目的】
@@ -672,7 +672,7 @@ def compute_p1_multi_dim_smooth_score(
         amplified_base = round(base_score * combo_multiplier, 2)
         if w_fm > 1e-9:
             fm100 = float(np.clip(fm_raw / 200.0 * 100.0, 0.0, 100.0))
-            # 【V26.5 优化】平滑过渡：w_fm 小幅值时用对数软化，避免从0到正数时分数突变
+            # 【V26.6 优化】平滑过渡：w_fm 小幅值时用对数软化，避免从0到正数时分数突变
             # 使用 log1p 映射：w=0.10 时实际生效约 0.07，w=0.05 时约 0.03，w=0.03 时约 0.01
             if w_fm <= 0.10:
                 w_effective = float(np.log1p(w_fm) / np.log1p(0.10) * 0.10)

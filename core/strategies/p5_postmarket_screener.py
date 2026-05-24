@@ -2,10 +2,10 @@
 """
 小杰AI选股系统 Pro V26.7 — P5 盘后选股池「物理胸甲」向量化筛选模块（十四策略含箱体/均线粘合发散/缩量分歧低吸）
 ================================================================================
-【V26.5】资金条件：向量化 max(流通市值×比例, 阶梯地板)；换手 100% 使用 _turnover_f_eff（仅 turnover_rate_f 或手数反算）。
+【V26.6】资金条件：向量化 max(流通市值×比例, 阶梯地板)；换手 100% 使用 _turnover_f_eff（仅 turnover_rate_f 或手数反算）。
 禁止 net_* / inst 单一绝对万元门槛；禁止 turnover_rate 降级。
 
-【V26.5 A股特殊场景处理】
+【V26.6 A股特殊场景处理】
 - 涨跌停宽容：涨跌停时量比萎缩属于正常现象，P5 盘后策略应识别全日数据中的涨停特征。
 - 自适应换手率：根据流通市值档位动态调整换手率合理区间（P5-08 超级中军专用）。
   A股各市值档换手率差异巨大：大蓝筹0.3~2%、中盘0.5~4%、小盘1~6%、次新2~10%+。
@@ -60,7 +60,7 @@ class P5PostmarketConfig:
     s1_vr_min: float = 1.6
     s1_pct_low: float = 4.0
     s1_pct_high: float = 6.0
-    # 【V26.5 新增】P5-01 涨停时涨幅上限放宽（ST涨停9.9%，普通涨停9.9%）
+    # 【V26.6 新增】P5-01 涨停时涨幅上限放宽（ST涨停9.9%，普通涨停9.9%）
     s1_pct_high_limit_up: float = 9.9
     s1_upper_shadow_ratio_fly_gt: float = 0.04
 
@@ -571,13 +571,13 @@ def strategy_masks_p5(
     thr_inst3_s6 = vector_dynamic_inst_sum3_threshold(cm, cfg.s6_inst_sum3_ratio_of_float_mv)
     thr_nm_s8 = vector_dynamic_net_main_threshold(cm, cfg.s8_net_main_ratio_of_float_mv)
     nm_fly_s6 = vector_nm_fly_negative_threshold(cm, cfg.s6_net_main_fly_ratio_of_float_mv)
-    # 【V26.5 A股换手率自适应】根据流通市值动态调整换手率区间（P5-08 超级中军专用）
+    # 【V26.6 A股换手率自适应】根据流通市值动态调整换手率区间（P5-08 超级中军专用）
     # A股各市值档换手率差异巨大：大蓝筹0.3~2%、中盘0.5~4%、小盘1~6%、次新2~10%+
     tf_low_s8, tf_high_s8 = vector_adaptive_turnover_f_threshold(cm, cfg.s8_turnover_f_low, cfg.s8_turnover_f_high)
 
     masks: Dict[str, pd.Series] = {}
 
-    # 【V26.5 A股涨跌停宽容】涨停时涨幅上限放宽到 s1_pct_high_limit_up
+    # 【V26.6 A股涨跌停宽容】涨停时涨幅上限放宽到 s1_pct_high_limit_up
     limit_up = lim.shift(0) == 1
     pct_high_s1 = np.where(limit_up.fillna(False), cfg.s1_pct_high_limit_up, cfg.s1_pct_high)
     s1_core = (
@@ -589,7 +589,7 @@ def strategy_masks_p5(
         & (pct <= pct_high_s1)
     )
     s1_fly = (high - close) / close.replace(0, np.nan) > cfg.s1_upper_shadow_ratio_fly_gt
-    # 【V26.5 A股涨跌停宽容】涨停时量比萎缩、长上影均属正常现象，不构成否决
+    # 【V26.6 A股涨跌停宽容】涨停时量比萎缩、长上影均属正常现象，不构成否决
     s1_vol_ok = limit_up | (vr >= cfg.s1_vr_min)
     s1_shadow_ok = limit_up | (~s1_fly.fillna(False))
     masks["P5-01·★核心四因子共振"] = s1_core & s1_vol_ok & s1_shadow_ok & _base_ok(df)
@@ -605,12 +605,12 @@ def strategy_masks_p5(
     masks["P5-02·★量价主升浪确认"] = masks["P5-02C·★量价确认"]
 
     s3_money = (nm > thr_nm_s3) & (close > ma60)
-    # 【V26.5 优化】北向硬改软：主力净额为正是核心，北向数据缺失时不应阻断策略
+    # 【V26.6 优化】北向硬改软：主力净额为正是核心，北向数据缺失时不应阻断策略
     hk_ok = (hk > 0) | (hk1 > 0)  # 近两日任一北向为正即可通过，避免数据滞后全灭
     s3_quality = (inst > 0) & hk_ok
     s3_core = s3_money & s3_quality
     s3_fly = vol > vma5 * cfg.s3_vol_over_vma5_fly_mult
-    # 【V26.5 A股涨跌停宽容】涨停时极端放量不构成否决（limit_up 已在 s1 块前定义）
+    # 【V26.6 A股涨跌停宽容】涨停时极端放量不构成否决（limit_up 已在 s1 块前定义）
     s3_fly_ok = limit_up | (~s3_fly.fillna(False))
     masks["P5-03A·★资金方向"] = s3_money & s3_fly_ok & _base_ok(df)
     masks["P5-03B·★资金质量"] = s3_quality & s3_fly_ok & _base_ok(df)
@@ -624,7 +624,7 @@ def strategy_masks_p5(
         & (vol <= vma5 * cfg.s4_vol_over_vma5_max_mult)
     )
     s4_fly = (mh < mh_prev) & mh_prev.notna() & mh.notna()
-    # 【V26.5 A股涨跌停宽容】涨停时放宽单峰量能约束：允许放量
+    # 【V26.6 A股涨跌停宽容】涨停时放宽单峰量能约束：允许放量
     masks["P5-04·★单峰密集突破"] = (
         (wr > cfg.s4_winner_min)
         & (close > c95)
@@ -635,7 +635,7 @@ def strategy_masks_p5(
     s5_trend = (ma5 > ma20) & (ma20 > ma60) & (close > h20)
     s5_quality = (macd > sig) & (cm >= cfg.s5_circ_mv_fly_lt_wan)
     s5_fly = cm < cfg.s5_circ_mv_fly_lt_wan
-    # 【V26.5 优化】假强判断：A股主升浪中适度放量是正常的，假强须同时满足：极端涨幅+极端放量+低筹码+收盘远离VWAP。
+    # 【V26.6 优化】假强判断：A股主升浪中适度放量是正常的，假强须同时满足：极端涨幅+极端放量+低筹码+收盘远离VWAP。
     # 注意：vwap 列可能缺失，此时跳过VWAP维度的假强检测，避免全池误判。
     s5_chase = (pct > 5.5) & (vr > 3.0) & (wr < 75.0)
     vwap_ok = "vwap" in df.columns
@@ -671,7 +671,7 @@ def strategy_masks_p5(
         & (pe < cfg.s7_pe_max)
         & (cm > cfg.s7_circ_mv_min_wan)
     )
-    # 【V26.5 优化】北向三日全正硬改软：若任一日数据缺失（hk<=0或nan）仍可通过，仅降权不加死。
+    # 【V26.6 优化】北向三日全正硬改软：若任一日数据缺失（hk<=0或nan）仍可通过，仅降权不加死。
     # 核心逻辑：主力连续净买 是本质要求，北向数据仅作辅助确认，数据缺失时不应阻断整个策略。
     # 宽松策略：近三日任一北向为正即可通过；数据全正时更优（额外加分在 strat_p5 中体现）。
     hk_all_positive = hk_ok.fillna(False) & hk1.notna() & hk2.notna() & (hk1 > 0) & (hk2 > 0)
@@ -720,7 +720,7 @@ def strategy_masks_p5(
         masks["P5-12·★箱体突破回踩"] = pd.Series(False, index=df.index)
 
     # ---------- 策略十三：均线粘合发散（三交易日前后短均线粘合 + 当日发散向上 + MACD 红柱）----------
-    # 【V26.5 → V26.7 修复】粘合窗口从3日延长至5日：3日窗口太短，偶发价格波动即可破坏粘合形态。
+    # 【V26.6 → V26.7 修复】粘合窗口从3日延长至5日：3日窗口太短，偶发价格波动即可破坏粘合形态。
     # 5日窗口更能捕捉真实均线收敛状态，减少假信号。均线粘合发散本质是中期整理后的方向选择。
     s13_cohesion_lookback: int = 5
     s13_cohesion_max_pct: float = cfg.s13_cohesion_max_pct

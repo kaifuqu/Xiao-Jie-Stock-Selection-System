@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 家用服务器 24h 无人值守守护进程（调度 + 交易日屏障 + 企微推送）
-【V26.5 新增资金记忆体系 · 第三阶段】：日线 fund_memory_score 由 data_fetcher 夜间/早盘增量管道 `_sync_daily_features()` 维护；本进程仅调度同步/P1，不直接计算该列。
+小杰AI选股系统 Pro V26.6 — 家用服务器 24h 无人值守守护进程（调度 + 交易日屏障 + 企微推送）
+【V26.6 新增资金记忆体系 · 第三阶段】：日线 fund_memory_score 由 data_fetcher 夜间/早盘增量管道 `_sync_daily_features()` 维护；本进程仅调度同步/P1，不直接计算该列。
 
 职责概览：
 - 仅交易日执行：数据同步、P1 重建、分时六槽快照、2档·竞价池、3档·盘中池、4档·盘尾池扫描与企微 Markdown 推送（与 Streamlit 解耦）。
@@ -13,7 +13,7 @@
 - 【早盘合并简报】交易日 **09:18** 仅由 `daily_open_heartbeat_routine()` 统一发送一条 Markdown：原早安问候（推送/巡航开关）+ 数据库探活 + ``risk_control.ui_alert_only`` 风控说明 + 巡航待命；启动补发与定时任务共用同一入口，并通过进程内锁 + pipeline_state 日标记双重去重，保证同日仅一条。预检失败则跳过企微简报并尝试一条运维告警（按日去重）。
 - 【时区锚定】模块首部设置 TZ=Asia/Shanghai 并在 Unix 上 tzset，与 ZoneInfo(BJ) 双保险。
 
-【调度哲学：尾盘重仓、盘中降频 · V26.5 第二阶段】
+【调度哲学：尾盘重仓、盘中降频 · V26.6 第二阶段】
 - P4 尾盘五拍（14:31 / 14:36 / 14:41 / 14:46 / 14:51）一律 **wait_for_lock_sec=900**（15 分钟）：工作线程内等锁，
   主循环 `schedule.run_pending` **永不阻塞**。其中 **14:40–14:55** 为「重仓核心窗」——与盘中降频的 P3 绝对互斥。
 - P3 **大幅降频**（默认每 5 分钟整分对齐一拍，可由 ``server.daemon_profile`` / ``daemon_p3_poll_interval_minutes`` 调整）；仅非阻塞抢锁。
@@ -1012,7 +1012,7 @@ def daily_open_heartbeat_routine() -> None:
         db_line = "正常" if db_ok else html.escape(str(db_msg), quote=False)
         risk_safe = html.escape(str(risk_line), quote=False)
         lines = [
-            f"🟢 **【小杰AI选股系统 Pro V26.5 V26.5】早安 · 交易日简报** <font color=\"comment\">[{ts_short}]</font>",
+            f"🟢 **【小杰AI选股系统 Pro V26.6 V26.6】早安 · 交易日简报** <font color=\"comment\">[{ts_short}]</font>",
             "",
             "今日为交易日，各项数据已就绪。",
             "",
@@ -1021,7 +1021,7 @@ def daily_open_heartbeat_routine() -> None:
             "",
             "---",
             "",
-            "✅ **小杰AI选股系统 Pro V26.5 核心引擎已就绪**",
+            "✅ **小杰AI选股系统 Pro V26.6 核心引擎已就绪**",
             "",
             f"- 数据库连接：{db_line}",
             f"- 当前风控模式：{risk_safe}",

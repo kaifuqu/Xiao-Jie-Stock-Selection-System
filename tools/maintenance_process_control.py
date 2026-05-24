@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 数据库维护用进程编排（方案二）
+小杰AI选股系统 Pro V26.6 — 数据库维护用进程编排（方案二）
 终止占用 quant_data.duckdb 的本项目 Python 进程（守护 + Streamlit），供
 weekly_db_maintenance_orchestrated / force_maintenance_vacuum 复用。
 """

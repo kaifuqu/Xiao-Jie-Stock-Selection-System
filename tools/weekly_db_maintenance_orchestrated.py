@@ -166,7 +166,7 @@ def main() -> int:
         write_master_control(maintenance_mode=False)
         log.info("已解除 maintenance_mode")
 
-    # 【V26.5 架构更新】已剥离主动唤醒职能，交由外层 start_daemon_24x7.bat 的 60 秒看门狗机制自动完成重启，彻底消灭双进程抢锁隐患。
+    # 【V26.6 架构更新】已剥离主动唤醒职能，交由外层 start_daemon_24x7.bat 的 60 秒看门狗机制自动完成重启，彻底消灭双进程抢锁隐患。
     log.info(
         "本脚本不再 subprocess 拉起守护；若由 7x24 外壳启动，请保持 start_daemon_24x7.bat 看门狗运行以在约 60s 后自动拉起 auto_sniper_daemon。"
     )

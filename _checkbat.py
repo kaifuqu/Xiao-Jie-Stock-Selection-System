@@ -3,7 +3,7 @@ with open("d:/xiaojie/start_daemon_24x7.bat", "rb") as f:
 
 # Expected GBK bytes for key Chinese strings
 checks = {
-    "小杰AI选股系统 Pro V26.5": None,
+    "小杰AI选股系统 Pro V26.6": None,
     "7x24 后台看门狗已启动": None,
 }
 

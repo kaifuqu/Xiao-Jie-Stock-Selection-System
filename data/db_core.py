@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - 数据库核心驱动 (DuckDB UPSERT 防重装甲版)
+小杰AI选股系统 Pro V26.6 - 数据库核心驱动 (DuckDB UPSERT 防重装甲版)
 
 【模块职责】
 - 统一管理 DuckDB 连接、表结构演进、按主键 UPSERT 落库。
@@ -14,7 +14,7 @@
 3. 异常与日志：关键路径补充异常信息，避免静默失败；不改变对外 DataFrame 列顺序语义（落库仍按传入 df 的列顺序）。
 4. 数据库路径固定为 `<项目根>/data/<文件名>`，避免误配到其它目录。
 5. QFQ 与指标兜底逻辑保持原行为，仅在注释上澄清契约。
-6. daily_data 列集随 data_fetcher.ALL_55_COLS 演进；【V26.5 新增资金记忆体系】含 capital_resonance_score（DOUBLE，0~100）、
+6. daily_data 列集随 data_fetcher.ALL_55_COLS 演进；【V26.6 新增资金记忆体系】含 capital_resonance_score（DOUBLE，0~100）、
    fund_memory_score（DOUBLE，0~200，半衰期见 constants.FUND_MEMORY_HALF_LIFE_DAYS）。
    全量重铸时 CREATE 随 DataFrame；增量 UPSERT 时 _ensure_table_schema 对缺失列执行 ALTER TABLE ADD COLUMN。
    手工修补示例：ALTER TABLE daily_data ADD COLUMN capital_resonance_score DOUBLE;
@@ -869,6 +869,47 @@ def _check_and_fix_primary_key(table_name, pk_cols):
         return True
 
 
+def _ensure_performance_indexes(con, table_name: str) -> None:
+    """
+    【V26.6 新增】确保关键索引存在，避免全表扫描拖慢查询。
+
+    背景：DuckDB 对 WHERE ts_code = ? 和 WHERE trade_date BETWEEN ? AND ?
+    条件过滤高度依赖索引。在 daily_data（约数百万行）上进行这类过滤时，
+    无索引会导致全表扫描，查询耗时从 <100ms 升至 1-10s。
+
+    索引策略：
+    - daily_data(ts_code, trade_date)：复合索引，同时加速「某股历史」和「某日全市场」查询
+    - daily_data(trade_date)：单独索引，加速按日期过滤全市场数据
+    - stock_basic(industry)：加速行业统计 groupby
+    - signal_log(ts_code, trade_date)：加速信号查询
+
+    使用 IF NOT EXISTS 防止重复创建报错（DuckDB 不支持 OR REPLACE）。
+    此函数在每次表结构变更后调用，安全幂等。
+    """
+    _INDEX_DEFINITIONS = {
+        "daily_data": [
+            ("idx_daily_ts_code", "ts_code"),
+            ("idx_daily_trade_date", "trade_date"),
+            ("idx_daily_ts_trade", "ts_code, trade_date"),
+        ],
+        "stock_basic": [
+            ("idx_basic_industry", "industry"),
+        ],
+        "signal_log": [
+            ("idx_signal_ts_code", "ts_code"),
+            ("idx_signal_ts_trade", "ts_code, trade_date"),
+        ],
+    }
+
+    indexes = _INDEX_DEFINITIONS.get(table_name, [])
+    for idx_name, columns in indexes:
+        try:
+            con.execute(f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{table_name}" ({columns})')
+            logging.debug("索引 %s ON %s(%s) 已就绪", idx_name, table_name, columns)
+        except Exception as e:
+            logging.debug("创建索引 %s 失败（可能已存在或其他原因）: %s", idx_name, e)
+
+
 def _ensure_table_schema(table_name, df, pk_cols):
     """
     确保目标表存在且主键/列与当前 DataFrame 对齐。
@@ -907,7 +948,12 @@ def _ensure_table_schema(table_name, df, pk_cols):
         """
         con.execute(create_sql)
         logging.info(f"✅ {table_name} 表重建完成，共 {len(df.columns)} 列")
-        return
+
+    # 【V26.6 优化】建表后确保关键索引存在（DuckDB 对于频繁 WHERE 过滤的列非常依赖索引）
+    # 索引在 PRIMARY KEY 之外独立创建（DuckDB 的主键索引与普通索引分开管理）
+    # 对 daily_data：trade_date（日期范围过滤）、industry（板块联表查询）是最常用过滤列
+    # 对 stock_basic：industry（行业统计）、ts_code（股票查找）高频使用
+    _ensure_performance_indexes(con, table_name)
 
     existing = con.execute(f"PRAGMA table_info({table_name})").fetchdf()
     existing_cols = set(existing['name'])

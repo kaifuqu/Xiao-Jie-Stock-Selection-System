@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import logging
 import os
@@ -22,6 +23,8 @@ from typing import Any, Dict, Optional
 import yaml
 
 _BJ_TZ = timezone(timedelta(hours=8))
+# 【V26.6 优化】ZoneInfo 对象重建开销约 1ms，在高频路径上缓存
+_BJ_TZ_CACHE = _BJ_TZ
 _BREAKER_LOCK = threading.Lock()
 _BREAKER_CACHE: Dict[str, Any] = {"t": 0.0, "data": None}
 _BREAKER_TTL_SEC = 45.0
@@ -50,6 +53,7 @@ def _config_path() -> str:
     return _CONFIG_PATH
 
 
+@functools.lru_cache(maxsize=1)
 def load_sop_v11_config() -> dict:
     """读取 config.yaml 的 sop_v11 节（熔断、observation_pool_relax 等）。"""
     try:
@@ -122,8 +126,8 @@ def _fetch_index_pct_tushare_fallback(ts_code: str) -> Optional[float]:
             ep = str(tcfg.get("custom_endpoint", "") or "").strip()
             if ep:
                 pro._DataApi__http_url = ep
-            end_d = datetime.now(_BJ_TZ).strftime("%Y%m%d")
-            start_d = (datetime.now(_BJ_TZ) - timedelta(days=20)).strftime("%Y%m%d")
+            end_d = datetime.now(_BJ_TZ_CACHE).strftime("%Y%m%d")
+            start_d = (datetime.now(_BJ_TZ_CACHE) - timedelta(days=20)).strftime("%Y%m%d")
             df = pro.index_daily(ts_code=str(ts_code).strip(), start_date=start_d, end_date=end_d)
             if df is None or df.empty:
                 return None
@@ -183,7 +187,7 @@ def evaluate_market_circuit_breaker(
         out["skipped"] = "circuit_breaker.disabled"
         return out
 
-    now = now or datetime.now(_BJ_TZ)
+    now = now or datetime.now(_BJ_TZ_CACHE)
     hhmm = _parse_hhmm(str(cb.get("active_after_hhmm", "14:30")))
     if hhmm:
         h, m = hhmm

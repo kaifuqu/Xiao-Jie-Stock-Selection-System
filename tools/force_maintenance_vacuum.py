@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 独立运维脚本：维护模式 + 优雅终止守护进程 + DuckDB VACUUM + 解除维护锁
+小杰AI选股系统 Pro V26.6 — 独立运维脚本：维护模式 + 优雅终止守护进程 + DuckDB VACUUM + 解除维护锁
 
 用法（在项目根或任意目录）:
     python tools/force_maintenance_vacuum.py
@@ -42,7 +42,7 @@ def _print_step(msg: str) -> None:
 
 def main() -> None:
     print("=" * 60, flush=True)
-    print("小杰AI选股系统 Pro V26.5 — force_maintenance_vacuum 运维脚本", flush=True)
+    print("小杰AI选股系统 Pro V26.6 — force_maintenance_vacuum 运维脚本", flush=True)
     print(f"项目根: {_PROJECT_ROOT}", flush=True)
     print("=" * 60, flush=True)
 
@@ -70,7 +70,7 @@ def main() -> None:
         _print_step("解除维护锁：write_master_control(maintenance_mode=False)")
         write_master_control(maintenance_mode=False)
 
-    # 【V26.5 架构更新】已剥离主动唤醒职能，交由外层 start_daemon_24x7.bat 的 60 秒看门狗机制自动完成重启，彻底消灭双进程抢锁隐患。
+    # 【V26.6 架构更新】已剥离主动唤醒职能，交由外层 start_daemon_24x7.bat 的 60 秒看门狗机制自动完成重启，彻底消灭双进程抢锁隐患。
     _print_step("步骤5（原步骤6已移除）：不再 subprocess 拉起守护进程")
     print(
         "    若使用 7x24 外壳：请保持 start_daemon_24x7.bat 看门狗运行；守护被维护杀死后约 60 秒将自动重启。",

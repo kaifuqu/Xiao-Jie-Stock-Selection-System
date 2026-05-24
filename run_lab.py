@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 策略实验室独立入口（与实盘 ui/app.py 进程隔离，避免重型科研组件与盯盘大屏争用内存）。
+小杰AI选股系统 Pro V26.6 — 策略实验室独立入口（与实盘 ui/app.py 进程隔离，避免重型科研组件与盯盘大屏争用内存）。
 
 运行：在项目根目录执行
   streamlit run run_lab.py
@@ -21,12 +21,12 @@ try:
 except ImportError:
 
     class _ConstShim:
-        APP_VERSION = "V26.5"
+        APP_VERSION = "V26.6"
 
     constants = _ConstShim()
 
 st.set_page_config(
-    page_title="小杰AI选股系统 Pro V26.5 - 策略实验室",
+    page_title="小杰AI选股系统 Pro V26.6 - 策略实验室",
     page_icon="🧪",
     layout="wide",
     initial_sidebar_state="expanded",

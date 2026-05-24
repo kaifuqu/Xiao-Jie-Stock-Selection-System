@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — P2 竞价选股池「物理胸甲」核心筛选模块
+小杰AI选股系统 Pro V26.6 — P2 竞价选股池「物理胸甲」核心筛选模块
 ================================================================================
 本模块严格对齐 data_fetcher.ALL_55_COLS 字段契约，实现：
 
@@ -109,7 +109,7 @@ class P2ScreenerConfig:
     s1_prev_pct_low: float = 4.0
     s1_prev_pct_high: float = 6.0
     s1_prev_vol_ratio_min: float = 1.8
-    # 【V26.5 优化】昨日 MACD 柱须为正（昨日要有上涨动能）
+    # 【V26.6 优化】昨日 MACD 柱须为正（昨日要有上涨动能）
     s1_prev_macd_hist_positive: bool = True
     # 昨日获利盘下限（筹码集中度门槛，>85 表示大部分筹码盈利）
     s1_winner_min: float = 85.0
@@ -117,7 +117,7 @@ class P2ScreenerConfig:
     s1_vol_ratio_min: float = 1.8
     s1_auction_pct_low: float = 1.0
     s1_auction_pct_high: float = 3.0
-    # 【V26.5 新增】昨 ATR 超限否决阈值
+    # 【V26.6 新增】昨 ATR 超限否决阈值
     s1_atr_pct_max: float = 8.0
 
     # --- 策略二：机构连贯发力 ---
@@ -140,11 +140,11 @@ class P2ScreenerConfig:
     s3_atr_pct_max: float = 8.0
     # 竞价额相对昨日全天成交额比例低于此值视为「异常萎缩」（量纲一致时生效）
     s3_auction_amount_vs_prev_ratio_min: float = 0.05
-    # 【V26.5 优化】P2-03 涨跌停宽容：涨停时换手率下限适当放宽（涨停日封板后换手自然降低）
+    # 【V26.6 优化】P2-03 涨跌停宽容：涨停时换手率下限适当放宽（涨停日封板后换手自然降低）
     s3_auction_turnover_min_pct: float = 0.4
-    # 【V26.5 优化】P2-03 长上影容忍（涨停日上影正常存在）
+    # 【V26.6 优化】P2-03 长上影容忍（涨停日上影正常存在）
     s3_upper_shadow_max_pct: float = 2.5
-    # 【V26.5 修复】策略三要求连续2日龙虎榜机构净买达动态门槛
+    # 【V26.6 修复】策略三要求连续2日龙虎榜机构净买达动态门槛
     s3_inst_net_buy_ratio_of_float_mv: float = 0.00006
 
     # --- 策略四：底仓重金点火（流通市值比例 + 阶梯地板，见 fund_mv_utils）---
@@ -603,10 +603,10 @@ def _strategy_main_wave_confirm(
     防飞刀:
         昨日 net_main_amount < 0 则剔除, atr_pct > 8% 则剔除
     """
-    # 【V26.5 A股涨跌停宽容】涨停时相关条件做相应放宽
+    # 【V26.6 A股涨跌停宽容】涨停时相关条件做相应放宽
     is_limit_up = str(rt.get("_is_limit", "")) == "UP"
 
-    # 【V26.5 优化】新增：昨日 MACD 柱须为正（昨日要有上涨动能）
+    # 【V26.6 优化】新增：昨日 MACD 柱须为正（昨日要有上涨动能）
     mh = _macd_hist_row(y)
     if mh <= 0:
         return False, "昨日 macd_hist 未为正"
@@ -632,7 +632,7 @@ def _strategy_main_wave_confirm(
         return False, "开盘未过 cost_95th"
     if h20 <= 0 or open_px <= h20:
         return False, "开盘未过 high_20"
-    # 【V26.5 A股涨跌停宽容】涨停时涨幅上限和量比要求放宽
+    # 【V26.6 A股涨跌停宽容】涨停时涨幅上限和量比要求放宽
     pct_high_s1 = 9.5 if is_limit_up else cfg.s1_auction_pct_high
     if not (cfg.s1_pct_low <= pct <= pct_high_s1):
         return False, f"竞价涨幅不在 {cfg.s1_pct_low}%~{pct_high_s1}%"
@@ -643,7 +643,7 @@ def _strategy_main_wave_confirm(
     if atrp > cfg.s1_atr_pct_max:
         return False, f"防飞刀 atr_pct={atrp:.2f}% > {cfg.s1_atr_pct_max}%"
 
-    # 【V26.5 A股涨跌停宽容】涨停时竞价额萎缩是正常现象
+    # 【V26.6 A股涨跌停宽容】涨停时竞价额萎缩是正常现象
     if not is_limit_up and _auction_amount_shrinked(rt, y, cfg):
         return False, "防飞刀 竞价额相对昨日萎缩"
 
@@ -670,13 +670,13 @@ def _strategy_institution_streak(
     防飞刀:
         昨日长上影 (high-close)/close > {s2_upper_shadow_max_pct}%
     """
-    # 【V26.5 A股涨跌停宽容】涨停时相关条件做相应放宽
+    # 【V26.6 A股涨跌停宽容】涨停时相关条件做相应放宽
     is_limit_up = str(rt.get("_is_limit", "")) == "UP"
 
     y_pct = _safe_float(y.get("pct_chg"), 0.0)
     y_vr = _safe_float(y.get("vol_ratio"), 0.0)
     mh = _macd_hist_row(y)
-    # 【V26.5 A股涨跌停宽容】昨日涨停时，涨幅上限放宽到9.5%
+    # 【V26.6 A股涨跌停宽容】昨日涨停时，涨幅上限放宽到9.5%
     pct_high_prev = 9.5 if is_limit_up else cfg.s2_prev_pct_high
     if not (cfg.s2_prev_pct_low <= y_pct <= pct_high_prev):
         return False, f"昨日涨幅不在 {cfg.s2_prev_pct_low}%~{pct_high_prev}%"
@@ -685,12 +685,12 @@ def _strategy_institution_streak(
     if y_vr < cfg.s2_prev_vol_ratio_min:
         return False, "昨日量比不足 1.8"
 
-    # 【V26.5 优化】新增：昨日长上影防飞刀（与P3/P4/P5保持一致）
+    # 【V26.6 优化】新增：昨日长上影防飞刀（与P3/P4/P5保持一致）
     y_high = _safe_float(y.get("high"), 0.0)
     y_close = _safe_float(y.get("close"), 0.0)
     if y_close > 0:
         upper = (y_high - y_close) / y_close * 100.0
-        # 【V26.5 A股涨跌停宽容】涨停时上影属于正常现象，不触发否决
+        # 【V26.6 A股涨跌停宽容】涨停时上影属于正常现象，不触发否决
         if not is_limit_up and upper > cfg.s2_upper_shadow_max_pct:
             return False, f"防飞刀 昨日长上影 {upper:.2f}% > {cfg.s2_upper_shadow_max_pct}%"
 
@@ -701,16 +701,16 @@ def _strategy_institution_streak(
     pct = _auction_pct_vs_preclose(open_px, pre_close)
     if ma5 <= 0 or open_px <= ma5:
         return False, "开盘未站上 ma5"
-    # 【V26.5 优化】今日开盘须站稳 MA10（确保短期均线支撑）
+    # 【V26.6 优化】今日开盘须站稳 MA10（确保短期均线支撑）
     if ma10 > 0 and open_px <= ma10:
         return False, "开盘未站稳 ma10"
 
-    # 【V26.5 优化】MACD 水上金叉：diff > dea 且两者均为正值（多头排列）
+    # 【V26.6 优化】MACD 水上金叉：diff > dea 且两者均为正值（多头排列）
     macd_diff = _safe_float(y.get("macd_diff"), 0.0)
     macd_dea = _safe_float(y.get("macd_dea"), 0.0)
     if not (macd_diff > macd_dea and macd_dea > 0):
         return False, "MACD未呈水上金叉(diff>dea>0)"
-    # 【V26.5 A股涨跌停宽容】涨停时涨幅上限放宽
+    # 【V26.6 A股涨跌停宽容】涨停时涨幅上限放宽
     pct_high_s2 = 9.5 if is_limit_up else cfg.s2_pct_high
     if not (cfg.s2_pct_low <= pct <= pct_high_s2):
         return False, f"竞价涨幅不在 {cfg.s2_pct_low}%~{pct_high_s2}%"
@@ -751,7 +751,7 @@ def _strategy_endless_sky(
     if len(df) < 2:
         return False, "历史不足 2 日"
 
-    # 【V26.5 A股涨跌停宽容】涨停时相关条件做相应放宽
+    # 【V26.6 A股涨跌停宽容】涨停时相关条件做相应放宽
     is_limit_up = str(rt.get("_is_limit", "")) == "UP"
 
     y_prev = df.iloc[-2]
@@ -762,19 +762,19 @@ def _strategy_endless_sky(
     if not (inst1 > inst_thr and inst0 > inst_thr):
         return False, "inst_net_buy 未连续两日达动态机构门槛"
 
-    # 【V26.5 优化】昨日主力净额须连续2日为正（确保资金持续流入）
+    # 【V26.6 优化】昨日主力净额须连续2日为正（确保资金持续流入）
     nm1 = _safe_float(y.get("net_main_amount"), 0.0)
     nm0 = _safe_float(y_prev.get("net_main_amount"), 0.0)
     if not (nm1 > 0 and nm0 > 0):
         return False, "昨日主力净额未连续两日为正"
 
-    # 【V26.5 优化】昨收须站稳 MA5（竞价前日须处于上升趋势中）
+    # 【V26.6 优化】昨收须站稳 MA5（竞价前日须处于上升趋势中）
     y_close = _safe_float(y.get("close"), 0.0)
     ma5_y = _safe_float(y.get("ma5"), 0.0)
     if ma5_y > 0 and y_close <= ma5_y:
         return False, "昨收未站稳 ma5"
 
-    # 【V26.5 优化】hk_vol 为日线结算数据，竞价时无法获取当日值，
+    # 【V26.6 优化】hk_vol 为日线结算数据，竞价时无法获取当日值，
     # 不再作为硬性否决条件，改为记录状态供后续标注参考。
     hk_vol_val = _safe_float(y.get("hk_vol"), 0.0)
     rt["_hk_vol_positive_days"] = 1 if hk_vol_val > 0 else 0
@@ -786,7 +786,7 @@ def _strategy_endless_sky(
                 hk_3day_positive += 1
     rt["_hk_vol_3day_count"] = hk_3day_positive
 
-    # 【V26.5 优化】新增：昨日 MACD 柱须为正（与策略一/二保持一致）
+    # 【V26.6 优化】新增：昨日 MACD 柱须为正（与策略一/二保持一致）
     mh = _macd_hist_row(y)
     if mh <= 0:
         return False, "昨日 macd_hist 未为正"
@@ -800,19 +800,19 @@ def _strategy_endless_sky(
     open_px = _safe_float(rt.get("open"), 0.0)
     pre_close = _safe_float(rt.get("pre_close"), _safe_float(y.get("close"), 0.0))
     pct = _auction_pct_vs_preclose(open_px, pre_close)
-    # 【V26.5 A股涨跌停宽容】涨停时涨幅上限放宽
+    # 【V26.6 A股涨跌停宽容】涨停时涨幅上限放宽
     pct_high_s3 = 9.5 if is_limit_up else cfg.s3_pct_high
     if not (cfg.s3_pct_low <= pct <= pct_high_s3):
         return False, f"竞价涨幅不在 {cfg.s3_pct_low}%~{pct_high_s3}%"
 
     px_auction = open_px if open_px > 0 else _safe_float(rt.get("price"), pre_close)
     est_to = effective_turnover_rate_f(rt, y, px_auction if px_auction > 0 else pre_close)
-    # 【V26.5 A股涨跌停宽容】涨停时换手率下限适当放宽
+    # 【V26.6 A股涨跌停宽容】涨停时换手率下限适当放宽
     to_min = 0.15 if is_limit_up else cfg.s3_auction_turnover_min_pct
     if est_to <= to_min:
         return False, f"预估开盘换手 {est_to:.3f}% <= {to_min:.3f}%"
 
-    # 【V26.5 A股涨跌停宽容】涨停时量比萎缩是正常现象，不应因此排除
+    # 【V26.6 A股涨跌停宽容】涨停时量比萎缩是正常现象，不应因此排除
     vr = _safe_float(rt.get("vol_ratio"), 0.0)
     if not is_limit_up and vr < cfg.s3_vol_ratio_min:
         return False, "量比不足"
@@ -821,17 +821,17 @@ def _strategy_endless_sky(
     # y_close 在前文已声明（昨收站稳MA5检查处），复用避免重复定义
     if y_close > 0:
         upper = (y_high - y_close) / y_close * 100.0
-        # 【V26.5 A股涨跌停宽容】涨停时上影属于正常现象，不触发否决
+        # 【V26.6 A股涨跌停宽容】涨停时上影属于正常现象，不触发否决
         if not is_limit_up and upper > cfg.s3_upper_shadow_max_pct:
             return False, f"防飞刀 长上影 {upper:.2f}% > {cfg.s3_upper_shadow_max_pct}%"
 
-    # 【V26.5 A股涨跌停宽容】涨停时 ATR 超限也是正常波动，不否决
+    # 【V26.6 A股涨跌停宽容】涨停时 ATR 超限也是正常波动，不否决
     if not is_limit_up:
         atrp = _safe_float(y.get("atr_pct"), 0.0)
         if atrp > cfg.s3_atr_pct_max:
             return False, f"防飞刀 atr_pct={atrp:.2f}% > {cfg.s3_atr_pct_max}%"
 
-    # 【V26.5 A股涨跌停宽容】涨停时竞价额萎缩是正常现象
+    # 【V26.6 A股涨跌停宽容】涨停时竞价额萎缩是正常现象
     if not is_limit_up and _auction_amount_shrinked(rt, y, cfg):
         return False, "防飞刀 竞价额相对昨日萎缩"
 
@@ -874,7 +874,7 @@ def _strategy_heavy_base_ignite(
     open_px = _safe_float(rt.get("open"), 0.0)
     pre_close = _safe_float(rt.get("pre_close"), _safe_float(y.get("close"), 0.0))
     pct = _auction_pct_vs_preclose(open_px, pre_close)
-    # 【V26.5 A股涨跌停宽容】涨停时涨幅上限放宽
+    # 【V26.6 A股涨跌停宽容】涨停时涨幅上限放宽
     is_limit_up = str(rt.get("_is_limit", "")) == "UP"
     pct_high_s4 = 9.5 if is_limit_up else cfg.s4_pct_high
     if not (cfg.s4_pct_low <= pct <= pct_high_s4):
@@ -885,7 +885,7 @@ def _strategy_heavy_base_ignite(
     if strth <= strth_need:
         return False, "strth 不足(动态门槛)"
 
-    # 【V26.5 优化】hk_vol 为日线结算数据，竞价时无法获取当日值，
+    # 【V26.6 优化】hk_vol 为日线结算数据，竞价时无法获取当日值，
     # 不再作为硬性否决条件，改为记录状态供后续标注参考。
     hk_vol_val = _safe_float(y.get("hk_vol"), 0.0)
     rt["_hk_vol_positive_days"] = 1 if hk_vol_val > 0 else 0
@@ -1057,7 +1057,7 @@ def evaluate_p2_screener(
         if hit_primary:
             out["sort_weight_bonus"] *= 1.05
 
-    # 【V26.5 优化】hk_vol / net_main_amount / inst_net_buy 为日线结算数据，
+    # 【V26.6 优化】hk_vol / net_main_amount / inst_net_buy 为日线结算数据，
     # 竞价显示"昨"标注，不作为当日判断依据，仅供参考。
     hk_vol_warn = ""
     hk_3day = rt.get("_hk_vol_3day_count", 0)
@@ -1089,7 +1089,7 @@ def evaluate_p2_screener(
         "t1_memory_score": round(t1_memory_score, 2),
         "open_confirm_hit": bool(open_confirm_hit),
         "y_trade_date": str(y.get("trade_date", "")),
-        "hk_vol_data_note": hk_vol_warn,  # V26.5 竞价北向数据滞后提示
+        "hk_vol_data_note": hk_vol_warn,  # V26.6 竞价北向数据滞后提示
     }
     return out
 

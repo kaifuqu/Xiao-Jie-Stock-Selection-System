@@ -330,7 +330,7 @@ strategies:
     s1_prev_pct_low: 4.0
     s1_prev_pct_high: 6.0
     s1_prev_vol_ratio_min: 1.75
-    # 【V26.5 修复】策略一昨日获利盘下限（筹码集中度门槛）
+    # 【V26.6 修复】策略一昨日获利盘下限（筹码集中度门槛）
     s1_winner_min: 85.0
     # 【V26.2 新增】今日竞价量比下限（涨跌停时跳过）
     s1_vol_ratio_min: 1.8
@@ -360,7 +360,7 @@ strategies:
     s3_auction_turnover_min_pct: 0.4
     # 【V26.2 新增】P2-03 长上影容忍（涨停日上影正常存在）
     s3_upper_shadow_max_pct: 2.5
-    # 【V26.5 修复】策略三龙虎榜机构净买动态比例门槛（连续2日）
+    # 【V26.6 修复】策略三龙虎榜机构净买动态比例门槛（连续2日）
     s3_inst_net_buy_ratio_of_float_mv: 0.00006
     # P2-04·★底仓重金点火
     s4_circ_mv_min_wan: 5000000.0

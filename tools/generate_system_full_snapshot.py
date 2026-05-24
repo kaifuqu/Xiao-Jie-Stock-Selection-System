@@ -73,11 +73,11 @@ ROLE_NOTES: dict[str, str] = {
         "夜间尾部 _sync_daily_features() 零 API 重算共振与资金记忆列；熔断时 raise_data_fetch_critical 联动企微。"
     ),
     "data/fund_memory_score.py": (
-        "【V26.5 资金记忆】21 交易日半衰期指数衰减状态机，输出 0~200；双重过滤（流通≥100 亿且 60 日内放量异动）后才非零落库；"
+        "【V26.6 资金记忆】21 交易日半衰期指数衰减状态机，输出 0~200；双重过滤（流通≥100 亿且 60 日内放量异动）后才非零落库；"
         "P1 路径由 score_calibration 按 fund_memory_weight_p1 可选凸入平滑分，不进入 P4/P5 硬闸。"
     ),
     "data/capital_resonance_features.py": (
-        "【V26.5】日线 capital_resonance_score（0~100）向量化：80 分底座 +20 分两融加分；"
+        "【V26.6】日线 capital_resonance_score（0~100）向量化：80 分底座 +20 分两融加分；"
         "与 fund_memory 并列由 _sync_daily_features 维护；P1 排序/分层闸与 P3–P5 低权重动态分使用。"
     ),
     "data/db_core.py": (
@@ -210,10 +210,10 @@ def _default_pipeline_role(rel: str) -> str:
     if rel == "verify_system.py":
         return (
             "轻量自检：配置、DuckDB、异步扫描目录、regime；"
-            "V26.5 起校验 capital_resonance_score 在最新日流通≥100 亿样本上覆盖率≥85%，及 fund_memory_score 列浮点结构。"
+            "V26.6 起校验 capital_resonance_score 在最新日流通≥100 亿样本上覆盖率≥85%，及 fund_memory_score 列浮点结构。"
         )
     if rel == "UPGRADE_LOG.md":
-        return "V26.5 交钥匙升级说明：资金记忆、共振列、增量管道、verify 验收步骤与排障（根目录 Markdown）。"
+        return "V26.6 交钥匙升级说明：资金记忆、共振列、增量管道、verify 验收步骤与排障（根目录 Markdown）。"
     if rel == "run_lab.py":
         return "策略实验室独立进程入口，与主 UI 分离。"
     if rel.endswith(".bat") or rel.endswith(".sh"):
@@ -227,7 +227,7 @@ def _build_html() -> str:
     parts.append("<!DOCTYPE html>")
     parts.append('<html lang="zh-CN"><head><meta charset="utf-8">')
     parts.append(
-        "<title>小杰AI选股系统 Pro V26.5 — 系统代码及使用说明（全量底稿）</title>"
+        "<title>小杰AI选股系统 Pro V26.6 — 系统代码及使用说明（全量底稿）</title>"
         "<style>"
         ":root{--bg:#0f1419;--fg:#e7e9ea;--muted:#8b98a5;--acc:#1d9bf0;--card:#192734;--border:#38444d}"
         "body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);"
@@ -265,13 +265,13 @@ def _build_html() -> str:
 
     # --- Executive ---
     parts.append("<section id='executive'>")
-    parts.append("<h1>小杰AI选股系统 Pro V26.5 — 系统代码及使用说明（全量底稿）</h1>")
+    parts.append("<h1>小杰AI选股系统 Pro V26.6 — 系统代码及使用说明（全量底稿）</h1>")
     parts.append(
         f"<p class='meta'>生成时间（机器本地）：{html.escape(now)} · 工作区根：<code>{html.escape(ROOT)}</code> · "
         f"同步输出：<code>docs/系统代码及使用说明.html</code> 与 <code>docs/system_full_snapshot.html</code></p>"
     )
     parts.append(
-        "<div class='guide'><strong>版本语境：</strong>当前主线为 <strong>V26.5</strong>，与 <code>constants.APP_VERSION</code> 一致；"
+        "<div class='guide'><strong>版本语境：</strong>当前主线为 <strong>V26.6</strong>，与 <code>constants.APP_VERSION</code> 一致；"
         "含资金共振列、资金活跃度记忆（fund_memory_score）、Daemon 调度优化、P5 次日早盘验证与企微剔除闸、"
         "DuckDB maintenance_mode 与短读连接运维路径等。"
         "\n\n<strong>本 HTML 约定：</strong>下文「导读」为自然语言说明 + 自动摘录的模块 docstring；"
@@ -328,7 +328,7 @@ def _build_html() -> str:
         "离线工具中「52 维」属科研语境，与实盘宽表口径不同。</li></ul>"
     )
 
-    parts.append("<h3>1.5 V26.5 资金记忆、企微闸与 P5 早盘验证</h3>")
+    parts.append("<h3>1.5 V26.6 资金记忆、企微闸与 P5 早盘验证</h3>")
     parts.append(
         "<div class='ok'><strong>资金记忆：</strong><code>data/fund_memory_score.py</code> 计算日线记忆分；"
         "<code>score_calibration.compute_p1_multi_dim_smooth_score</code> 按 <code>config.yaml</code> / "
@@ -343,7 +343,7 @@ def _build_html() -> str:
         "侧边栏核心底仓区展示验证统计。</div>"
     )
 
-    parts.append("<h3>1.6 DuckDB 维护模式与短读连接（V26.5）</h3>")
+    parts.append("<h3>1.6 DuckDB 维护模式与短读连接（V26.6）</h3>")
     parts.append(
         "<div class='ok'><strong>maintenance_mode：</strong>由 <code>core/master_control.py</code> 写入 "
         "<code>data/runtime/state/master_control.json</code>；为真时守护进程避让并在进入 "

@@ -2,7 +2,7 @@
 """
 P5 真龙底仓：前一交易日名单落盘 + 次日 09:35 快照二次形态验证（跨进程 JSON 状态）。
 
-【V26.5 第二阶段】与 auto_sniper_daemon 09:35 槽位咬合：early_morning_p5_validation
+【V26.6 第二阶段】与 auto_sniper_daemon 09:35 槽位咬合：early_morning_p5_validation
 拉取实时快照二次闸；结果落盘 data/runtime/state/p5_yesterday_validated.json；
 notification_gateway 按「已剔除」拦截企微；ui_sidebar 核心底仓区展示验证统计。
 

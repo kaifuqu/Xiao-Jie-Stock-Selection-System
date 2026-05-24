@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - UI 组件库（终极宽屏实战与路径贯通版）
+小杰AI选股系统 Pro V26.6 - UI 组件库（终极宽屏实战与路径贯通版）
 【细节修复】：
 1. 指数 DuckDB 兜底：`data.db_core.get_index_latest_from_daily_data`（腾讯失败时用）。
 2. 去除涨幅列多余的正号 (+)，保持视觉极致清爽，跌幅 (-) 完美保留。

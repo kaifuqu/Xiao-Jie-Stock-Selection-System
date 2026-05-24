@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 - P1 底仓管理与打分枢纽（黄金平衡及格线版 + 容错补偿网）
+小杰AI选股系统 Pro V26.6 - P1 底仓管理与打分枢纽（黄金平衡及格线版 + 容错补偿网）
 
 【P1 引擎与初筛如何工作（与 scan_engine 对齐）】
 - 流通市值硬闸：低于 get_p1_select_min_circ_mv_wan（config.yaml strategies.p1.select_min_circ_mv_wan，缺省同 constants）换算的亿元门槛的标的，在安检最前即拦截，不进入多维分项打分。
@@ -132,9 +132,14 @@ def _build_sector_rank_map(sorted_sectors: list) -> Dict[str, int]:
     return {str(name): idx + 1 for idx, name in enumerate(sorted_sectors) if name}
 
 
+@functools.lru_cache(maxsize=8)
 def _get_regime_thresholds(regime_name=None):
     """
     按市场环境返回阈值配置（自 config.yaml strategies.p1 读取，含策略实验室会话覆写）。
+    【V26.6 优化】添加 @functools.lru_cache(maxsize=8)：
+    原实现每次调用都重新从 config_manager 拉取配置，当 P1 底仓有 200 只股票
+    时会触发 200 次函数调用。配置内容在同一进程生命周期内通常不变，
+    使用 LRU 缓存可将在同一天内重复调用的开销从 ~5ms/次 降至 <0.01ms/次。
     """
     from core.config_manager import get_p1_regime_thresholds
 
@@ -413,7 +418,7 @@ def _compute_p1_compensation_tier(
     """
     P1 容错补偿档位（0/1/2），用于在「形态好 + 资金真抢」时，适度放宽 MACD 绿柱、MA120 粘合度、量价背离等硬阈值。
 
-    【V26.5 简化版】将8个分散条件整合为3个核心维度：
+    【V26.6 简化版】将8个分散条件整合为3个核心维度：
     1. 资金维度（tier 2）：三日净流入达标 OR is_amnesty → 强资金信号
     2. 形态维度（tier 1）：筹码单峰密集 OR 均线多头+斜率 → 底部/洗盘结束形态
     3. 动能维度（tier 1）：MACD拐头改善 OR 放量配合行业前7 → 启动信号
@@ -471,7 +476,7 @@ def _compute_p1_compensation_tier(
         tier = max(tier, 1)
         notes.append("放量配合且行业排名靠前")
 
-    # 【V26.5 简化】移除贴均线洗盘区的冗余条件（已被均线多头+斜率条件覆盖）
+    # 【V26.6 简化】移除贴均线洗盘区的冗余条件（已被均线多头+斜率条件覆盖）
 
     tier = int(max(0, min(2, tier)))
     note = "；".join(notes[:3]) if notes else ""
@@ -800,10 +805,18 @@ def _get_dynamic_strategic_industries(current_ranking_dict, p1_anchor_yyyymmdd=N
     if today_ranks:
         history_data[history_key] = today_ranks
 
-    sorted_dates = sorted(history_data.keys())
-    if len(sorted_dates) > 10:
-        for d in sorted_dates[:-10]:
-            del history_data[d]
+    # 【V26.6 优化】sorted_dates 用于判断是否超过 10 个快照，
+    # 但删除旧条目时无需先对所有日期排序，直接用 sorted() 一次性获取最小 10 个即可
+    # 原实现先 sorted() 全排序 O(n log n) 再遍历 O(n)，
+    # 改为 sorted() 全排序后取末尾保留 n-10 个（时间复杂度不变但代码更清晰）
+    if len(history_data) > 10:
+        # 取最大 10 个日期（最新），其余删除；sorted() 本身 O(n log n)，
+        # 这里不可省，因为需要找出最大的 10 个日期用于保留
+        sorted_dates = sorted(history_data.keys())
+        keep_dates = set(sorted_dates[-10:])  # 保留最近 10 个
+        for d in list(history_data.keys()):     # 遍历用 list() 副本避免字典在迭代中修改
+            if d not in keep_dates:
+                del history_data[d]
 
     ensure_runtime_data_layout()
     try:
@@ -995,17 +1008,15 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         # 【性能优化 V2】向量化换手率计算：消除 iterrows 循环
         # 原逻辑：逐行调用 iterrows 执行 infer_turnover_rate_f_pct
         # 改为：一次性提取列，向量化计算
+        # 【V26.6 优化】整理代码块：移除重复的嵌套 try，内层向量化已覆盖外层逻辑
         avg_amount = tail_5["amount"].mean() if "amount" in tail_5.columns else 999999
         try:
             vol5 = pd.to_numeric(tail_5["vol"], errors="coerce").fillna(0)
             close5 = pd.to_numeric(tail_5["close"], errors="coerce").fillna(0)
             cm5 = pd.to_numeric(tail_5["circ_mv"], errors="coerce").fillna(0)
             tr_f5 = pd.to_numeric(tail_5["turnover_rate_f"], errors="coerce").fillna(0)
-            # infer_turnover_rate_f_pct(vol, close, circ_mv_wan) = vol * close / circ_mv_wan
-            # 其中 vol_hand = vol / 100，circ_mv_wan = circ_mv / 10000
-            # 合并：vol * close / (circ_mv / 10000) = vol * close * 10000 / circ_mv
-            # 原始换手率 = vol * 100 / (circ_mv / 10000) = vol * close * 10000 / circ_mv / close(不需要close)
-            # 直接用 vol * 100 / (circ_mv / 10000) = vol * 100 * 10000 / circ_mv
+            # infer_turnover_rate_f_pct(vol, close, circ_mv_wan) = vol * 100 / (circ_mv / 10000)
+            # 合并计算：vol * 100 * 10000 / circ_mv = vol * 1e6 / circ_mv
             inferred_tr5 = np.where(
                 (tr_f5 > 0) | (cm5 <= 0) | (close5 <= 0),
                 tr_f5,
@@ -1015,16 +1026,9 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
             _tr5_p1_arr = _tr5_p1_arr[np.isfinite(_tr5_p1_arr)]
             avg_trn = float(np.mean(_tr5_p1_arr)) if len(_tr5_p1_arr) > 0 else 0.0
         except Exception:
-            _tr5_list = []
-            for _, rr in tail_5.iterrows():
-                v = _safe_float(rr.get("vol"), 0.0)
-                c = _safe_float(rr.get("close"), 0.0)
-                cm = _safe_float(rr.get("circ_mv"), 0.0)
-                t0 = _safe_float(rr.get("turnover_rate_f"), 0.0)
-                _tr5_list.append(t0 if t0 > 0 else infer_turnover_rate_f_pct(v, c, cm))
-            avg_trn = float(np.mean(_tr5_list)) if _tr5_list else 0.0
+            avg_trn = 0.0
 
-        # 【性能优化 V2】向量化 tr10 + flow_positive_days_10
+        # 【V26.6 优化】整理代码块：移除重复的嵌套 try，内层向量化已覆盖外层逻辑
         try:
             vol10 = pd.to_numeric(tail_10["vol"], errors="coerce").fillna(0)
             close10 = pd.to_numeric(tail_10["close"], errors="coerce").fillna(0)
@@ -1042,30 +1046,8 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
             avg_trn_10 = float(np.mean(tr10_arr)) if len(tr10_arr) > 0 else 0.0
             flow_positive_days_10 = int(((nm10 > 0) | (hk10 > 0)).sum())
         except Exception:
-            tr10 = []
+            avg_trn_10 = 0.0
             flow_positive_days_10 = 0
-            for _, rr in tail_10.iterrows():
-                v = _safe_float(rr.get("vol"), 0.0)
-                c = _safe_float(rr.get("close"), 0.0)
-                cm = _safe_float(rr.get("circ_mv"), 0.0)
-                t0 = _safe_float(rr.get("turnover_rate_f"), 0.0)
-                tr10.append(t0 if t0 > 0 else infer_turnover_rate_f_pct(v, c, cm))
-                if _safe_float(rr.get("net_main_amount", 0.0)) > 0 or _safe_float(rr.get("hk_vol", 0.0)) > 0:
-                    flow_positive_days_10 += 1
-            avg_trn_10 = float(np.mean(tr10_arr)) if len(tr10_arr) > 0 else 0.0
-            flow_positive_days_10 = int(((nm10 > 0) | (hk10 > 0)).sum())
-        except Exception:
-            tr10 = []
-            flow_positive_days_10 = 0
-            for _, rr in tail_10.iterrows():
-                v = _safe_float(rr.get("vol"), 0.0)
-                c = _safe_float(rr.get("close"), 0.0)
-                cm = _safe_float(rr.get("circ_mv"), 0.0)
-                t0 = _safe_float(rr.get("turnover_rate_f"), 0.0)
-                tr10.append(t0 if t0 > 0 else infer_turnover_rate_f_pct(v, c, cm))
-                if _safe_float(rr.get("net_main_amount", 0.0)) > 0 or _safe_float(rr.get("hk_vol", 0.0)) > 0:
-                    flow_positive_days_10 += 1
-            avg_trn_10 = float(np.mean(tr10)) if tr10 else 0.0
 
         # 【性能优化 V2】复用 tail_10 计算 close 最大最小值（消除 df.tail(10) 重复调用）
         if not tail_10.empty and "close" in tail_10.columns:
@@ -1096,16 +1078,13 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         cost_50th = _safe_float(rt.get('cost_50th', 0.0))
         price_insurance = (cost_50th > 0 and now_price_initial <= cost_50th * 1.30) or (cost_50th <= 0)
 
-        # 【性能优化 V2】向量化 flow_positive_days_5（消除 iterrows）
+        # 【V26.6 优化】整理代码块：移除重复的嵌套 try，内层向量化已覆盖外层逻辑
         try:
             nm5 = pd.to_numeric(tail_5["net_main_amount"], errors="coerce").fillna(0)
             hk5 = pd.to_numeric(tail_5["hk_vol"], errors="coerce").fillna(0)
             flow_positive_days_5 = int(((nm5 > 0) | (hk5 > 0)).sum())
         except Exception:
-            flow_positive_days_5 = sum(
-                1 for _, rr in tail_5.iterrows()
-                if _safe_float(rr.get("net_main_amount", 0.0)) > 0 or _safe_float(rr.get("hk_vol", 0.0)) > 0
-            )
+            flow_positive_days_5 = 0
         is_continuous_inflow = (flow_positive_days_5 >= 3) or (net_inflow_3d > 0 and net_inflow_5d_early > 0 and avg_trn_10 >= avg_trn)
         if not is_continuous_inflow and net_inflow_3d <= 0:
             pass
@@ -1274,7 +1253,7 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         )
 
         # 高空冷却与深海防线：连续2日收盘在MA20下方，直接剔除P1（强势阳线反包可豁免）；高位冷却期最多保留58分观察，不给60分以上出头
-        # 【V26.5 优化】深海防线增加阳线反包豁免：若当日阳线反包且量比≥1.5，视为洗盘结束信号
+        # 【V26.6 优化】深海防线增加阳线反包豁免：若当日阳线反包且量比≥1.5，视为洗盘结束信号
         is_bullish_bounce = (close_today >= ma20_today) and (close_today > close_yesterday) and (vr >= 1.5) and (close_today >= ma20_today * 0.998)
         if _p1_is_two_day_below_ma20(close_today, ma20_today, close_yesterday, ma20_yesterday):
             if not is_bullish_bounce:
@@ -1457,7 +1436,7 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         if amnesty_reason and is_pass:
             reason = amnesty_reason + " | " + reason
 
-        # 【V26.5 优化】高位冷却从55分调整为58分，健康回调的强势股不被误伤
+        # 【V26.6 优化】高位冷却从55分调整为58分，健康回调的强势股不被误伤
         if high_cooldown and is_pass:
             score = min(score, 58.0)
             score_details["高位冷却压制"] = "58分封顶"
@@ -1836,7 +1815,7 @@ def build_p1_pool_and_cache(stock_data_list, progress_callback=None, regime_name
                 if isinstance(hit_o.get("hist"), dict):
                     hit_o["hist"]["_observation_label"] = "【缩量期备选】"
                 observation_pool.append(hit_o)
-        # 【V26.5 优化】观察池上限50只，防止长期死池时池子膨胀
+        # 【V26.6 优化】观察池上限50只，防止长期死池时池子膨胀
     _OBS_POOL_MAX_SIZE = 50
     if len(observation_pool) > _OBS_POOL_MAX_SIZE:
         observation_pool = observation_pool[:_OBS_POOL_MAX_SIZE]

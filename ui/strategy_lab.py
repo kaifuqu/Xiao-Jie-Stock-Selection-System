@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.5 — 策略实验室：P1–P5 会话覆写 + 当日缓存回放 + 实验落库/回档。
+小杰AI选股系统 Pro V26.6 — 策略实验室：P1–P5 会话覆写 + 当日缓存回放 + 实验落库/回档。
 """
 from __future__ import annotations
 
@@ -802,8 +802,8 @@ def render_strategy_lab(*, curr_regime: str, progress_placeholder, progress_bar)
     _ensure_lab_state()
     _sanitize_lab_overrides_core_locked()
 
-    st.markdown("### 🧪 策略实验室 · V26.5")
-    with st.expander("📘 V26.5 与系统对齐说明（本页不修改磁盘 config.yaml）", expanded=False):
+    st.markdown("### 🧪 策略实验室 · V26.6")
+    with st.expander("📘 V26.6 与系统对齐说明（本页不修改磁盘 config.yaml）", expanded=False):
         st.markdown(
             """
 **会话覆写**  
