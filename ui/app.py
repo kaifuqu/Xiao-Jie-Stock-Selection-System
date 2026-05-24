@@ -2181,7 +2181,7 @@ else:
             else:
                 size_emoji, size_label = "🐥", "袖珍盘"
 
-            name_with_emoji = f"{size_emoji} {name}"
+            name_with_emoji = name
 
             pos_advice = "🛡️常规: 15-20%"
             if curr_regime == "主升浪":
@@ -2205,7 +2205,7 @@ else:
                 "量比": f"{vr_val:.1f}({vr_tag})",
                 "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%",
                 "行业": _industry_cache.get(s_code, "--"),
-                "股性": f"{size_emoji}{size_label}",
+                "股性": size_label,
                 "建议仓位": pos_advice,
                 "纪律防线": stop_loss,
                 "集中度": f"{cyq:.1f}" if cyq > 0 else "--",
@@ -2241,7 +2241,7 @@ if st.session_state.get("pool_view_mode") == "main_plus_obs":
             size_emoji, size_label = "🐎", "核心中盘"
         else:
             size_emoji, size_label = "🐥", "袖珍盘"
-        name_with_emoji = f"🔭 【高风险备选·仅供观察】 {size_emoji} {name}"
+        name_with_emoji = f"🔭 【高风险备选·仅供观察】 {name}"
         p1_display_data.append({
             "代码": s_code,
             "名称": name_with_emoji,
@@ -2251,7 +2251,7 @@ if st.session_state.get("pool_view_mode") == "main_plus_obs":
             "量比": f"{vr_val:.1f}({vr_tag})",
             "真换手": f"{_hist_display_turnover_f(hist if isinstance(hist, dict) else {}, db_close_p):.1f}%",
             "行业": _industry_cache.get(s_code, "--"),
-            "股性": f"{size_emoji}{size_label}",
+            "股性": size_label,
             "建议仓位": "⚠️ 高风险备选·仅供观察 | 单票≤8%",
             "纪律防线": "观察池：仅供观察，勿重仓",
             "集中度": f"{cyq:.1f}" if cyq > 0 else "--",
@@ -2335,7 +2335,7 @@ def enhance_pool_data(pool_data):
 
             orig_name = normalize_stock_display_name(str(row.get("名称", "")))
             if orig_name and orig_name[0] not in ["🦍", "🐘", "🐎", "🐥"]:
-                row["名称"] = f"{size_emoji} {orig_name}"
+                row["名称"] = orig_name
                 
             if curr_regime == "主升浪":
                 if size_emoji == "🐎": row["建议仓位"] = "🔥主攻: 30-40%"
@@ -2348,7 +2348,7 @@ def enhance_pool_data(pool_data):
                 elif size_emoji in ["🦍", "🐘"]: row["建议仓位"] = "🛡️均衡: 20-30%"
                 
             row["纪律防线"] = "破20日线" if size_emoji in ["🦍", "🐘"] else "3日未脱离成本"
-            row["股性"] = f"{size_emoji}{size_label}"
+            row["股性"] = size_label
         if "缩量说明" not in row:
             row["缩量说明"] = "--"
 

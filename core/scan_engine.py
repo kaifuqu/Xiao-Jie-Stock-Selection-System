@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 小杰AI选股系统 Pro V26.6 - 极速分发引擎（P1–P5 全池扫描中枢）
 
@@ -2940,7 +2940,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
             is_stop_loss = bool(trigger_ds)
             if trigger_ds:
                 res['danger_sell'].append({
-                    "代码": s_code, "名称": f"{size_emoji} {stock_name}", "现价": f"{now_price:.2f}",
+                    "代码": s_code, "名称": stock_name, "现价": f"{now_price:.2f}",
                     "涨幅": f"{pct:.2f}%", "斩仓指令": final_reason
                 })
             
@@ -2961,8 +2961,8 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
             if not isinstance(cs_ranks, dict):
                 cs_ranks = neutral_ranks()
             base_info = {
-                "代码": s_code, "名称": f"{size_emoji} {stock_name}", "行业": f"{industry}({ind_rank_str})", 
-                "股性": f"{size_emoji}{size_label}", "综合分": 0.0, "涨幅": f"{pct:.2f}%", 
+                "代码": s_code, "名称": stock_name, "行业": f"{industry}({ind_rank_str})", 
+                "股性": size_label, "综合分": 0.0, "涨幅": f"{pct:.2f}%", 
                 "量比": f"{min(_vr_show, 50.0):.1f}({vol_ratio_tag})", "建议仓位": "", "纪律防线": "",  
                 "真换手": f"{_trf_disp:.1f}%", "集中度": cyq_str, 
                 global_hk_label: _hk_wan_str,
@@ -3167,7 +3167,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                             
                             if fatal_reasons:
                                 res['danger_buy'].append({
-                                    "代码": s_code, "名称": f"{size_emoji} {stock_name}", "现价": f"{now_price:.2f}",
+                                    "代码": s_code, "名称": stock_name, "现价": f"{now_price:.2f}",
                                     "涨幅": f"{pct:.2f}%", "致死原因": " | ".join(fatal_reasons)
                                 })
                                 is_danger_buy_added = True
@@ -3395,7 +3395,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 )
                 res["danger_buy"].append({
                     "代码": s_code,
-                    "名称": f"{size_emoji} {stock_name}",
+                    "名称": stock_name,
                     "现价": f"{now_price:.2f}",
                     "涨幅": f"{pct:.2f}%",
                     "致死原因": _reason_vwap_only,

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 小杰AI选股系统 Pro V26.6 - P3 盘中战法池（物理胸甲八大策略 + 热成像增强版）
 【架构】
@@ -336,13 +336,13 @@ class P3Intraday:
             circ_mv_yi = _safe_float(circ_mv_raw) / 10000.0
 
             if circ_mv_yi >= 2000.0:
-                size_emoji = "🦍"
+                size_emoji = "巨无霸(2000亿+)"
             elif circ_mv_yi >= 1000.0:
-                size_emoji = "🐘+"
+                size_emoji = "千亿中军(1000-2000亿)"
             elif circ_mv_yi >= 500.0:
-                size_emoji = "🐘"
+                size_emoji = "超级中军(500-1000亿)"
             else:
-                size_emoji = "🐎"
+                size_emoji = "核心中盘(100-500亿)"
 
             if circ_mv_yi < _p1_min_circ_mv_yi_strat():
                 return res

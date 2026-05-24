@@ -1440,7 +1440,7 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         if high_cooldown and is_pass:
             score = min(score, 58.0)
             score_details["高位冷却压制"] = "58分封顶"
-        score_details["市值档位"] = f"{size_emoji}{mv_tier}"
+        score_details["市值档位"] = mv_tier
         return {"ts_code": ts_code, "score": score, "is_pass": is_pass, "reason": reason, "item": item, "df": df, "inflow_ratio": inflow_ratio, "inflow_10d_ratio": inflow_10d_ratio, "score_details": score_details, "used_fast_track": used_fast_track}
         
     except Exception as e:

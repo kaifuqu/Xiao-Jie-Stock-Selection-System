@@ -527,13 +527,13 @@ def compute_p1_multi_dim_smooth_score(
             mv_bonus = 4.0
 
         if circ_mv_yi >= 2000.0:
-            mv_tier = "🦍巨无霸(2000亿+)"
+            mv_tier = "巨无霸(2000亿+)"
         elif circ_mv_yi >= 1000.0:
-            mv_tier = "🐘+千亿中军(1000-2000亿)"
+            mv_tier = "千亿中军(1000-2000亿)"
         elif circ_mv_yi >= 500.0:
-            mv_tier = "🐘500亿+"
+            mv_tier = "超级中军(500-1000亿)"
         else:
-            mv_tier = f"🐎{int(p1_min_yi)}-500亿"
+            mv_tier = f"核心中盘({int(p1_min_yi)}-500亿)"
 
         # 第 2 步：多维分项与附加项全部写入 details（先于 base_score / 记忆融合）
         score_details: Dict[str, Any] = {

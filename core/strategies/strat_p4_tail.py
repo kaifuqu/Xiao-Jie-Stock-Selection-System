@@ -495,15 +495,15 @@ class P4Tail:
                 return res
 
             if circ_mv_yi >= 2000.0:
-                size_emoji = "🦍"
+                size_emoji = "巨无霸(2000亿+)"
             elif circ_mv_yi >= 1000.0:
-                size_emoji = "🐘+"
+                size_emoji = "千亿中军(1000-2000亿)"
             elif circ_mv_yi >= 500.0:
-                size_emoji = "🐘"
+                size_emoji = "超级中军(500-1000亿)"
             elif circ_mv_yi >= 100.0:
-                size_emoji = "🐎"
+                size_emoji = "核心中盘(100-500亿)"
             else:
-                size_emoji = "🐥"
+                size_emoji = "袖珍盘(<100亿)"
 
             req_main = golden_tier_net_elg_min_yuan(circ_mv_yi)
             req_hk = golden_tier_hk_min_shares(circ_mv_yi)

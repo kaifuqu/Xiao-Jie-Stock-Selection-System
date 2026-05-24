@@ -6,13 +6,13 @@ import re
 from typing import Any
 
 
-# 市值体型体型标记 emoji（🦍🐘🐎🐥），不应出现在展示名称中
+# 历史遗留 emoji 清洗（已停止向名称添加市值 emoji，保留此正则用于兼容旧数据）
 _SIZE_EMOJI_RE = re.compile(r"[\U0001F98D\U0001F418\U0001F40E\U0001F425]\s*")
 
 
 def normalize_stock_display_name(name: Any) -> str:
     s = str(name or "")
-    # 先去除市值体型标记 emoji（🦍🐘🐎🐥）
+    # 兼容旧数据：去除可能残留的历史市值 emoji
     s = _SIZE_EMOJI_RE.sub("", s)
     s = re.sub(r"^[\s\+＋]+", "", s).strip()
     s = re.sub(r"\s*\+\s*", " ", s)
