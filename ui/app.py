@@ -2352,40 +2352,6 @@ def enhance_pool_data(pool_data):
         if "缩量说明" not in row:
             row["缩量说明"] = "--"
 
-# ===== 📝 名称修复：P2-P5 批量补全中文名称 =====
-# 收集 P2-P5 所有唯一股票代码
-_all_codes = []
-for _pd in (p2_data, p3_data, p4_data, p5_data):
-    for _row in _pd:
-        _c = str(_row.get("代码", "")).strip()
-        if _c and _c not in _all_codes:
-            _all_codes.append(_c)
-
-if _all_codes:
-    try:
-        # 【V26.6 优化】使用 session_state 缓存实时名称映射，30秒内不重复调用 API
-        # Streamlit 每次页面交互都会重新执行脚本，若无缓存每次都调用 fetch_realtime_batch
-        # 改为带 TTL 的 session_state 缓存，避免页面刷新/交互时重复拉取相同数据
-        _rt_cache_key = "_p2p5_rt_cache"
-        _rt_cached: dict = st.session_state.get(_rt_cache_key, {})
-        _rt_ts = st.session_state.get(f"{_rt_cache_key}_ts", 0.0)
-        _now_ts = time.time()
-        if not _rt_cached or (_now_ts - _rt_ts) > 30.0:
-            from data.api_fetcher import fetch_realtime_batch as _fetch_rt
-            _rt_cached = _fetch_rt(_all_codes) or {}
-            st.session_state[_rt_cache_key] = _rt_cached
-            st.session_state[f"{_rt_cache_key}_ts"] = _now_ts
-        _rt_map = _rt_cached
-        for _pd in (p2_data, p3_data, p4_data, p5_data):
-            for _row in _pd:
-                _c = str(_row.get("代码", "")).strip()
-                _rt = _rt_map.get(_c)
-                if _rt and isinstance(_rt, dict) and _rt.get("name"):
-                    from core.stock_name_utils import normalize_stock_display_name
-                    _row["名称"] = normalize_stock_display_name(_rt.get("name", ""))
-    except Exception as _e:
-        logging.debug("名称修复批量失败: %s", _e)
-
 enhance_pool_data(p2_data)
 enhance_pool_data(p3_data)
 enhance_pool_data(p4_data)
