@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 小杰AI选股系统 Pro V26.6 - P4 尾盘战法引擎（核心六战法版）
 【架构】
@@ -159,7 +159,8 @@ class P4Tail:
             ma20 = float(curr.get("ma20", 0.0) or 0.0)
             if ma20 > 0 and now_px < ma20:
                 return 0.0
-            # 【性能优化 V2】向量化替代 iterrows：批量计算近3日换手率
+            # 【性能优化 V2→V3】向量化替代 iterrows：批量计算近3日换手率
+            # 保留原 try 结构，仅将 except 分支改为向量化计算
             df_tail3 = df.tail(3)
             try:
                 vol3 = pd.to_numeric(df_tail3["vol"], errors="coerce").fillna(0)
@@ -175,14 +176,12 @@ class P4Tail:
                 _tr3_arr = _tr3_arr[np.isfinite(_tr3_arr)]
                 avg_tr3 = float(np.mean(_tr3_arr)) if len(_tr3_arr) > 0 else 0.0
                 turnover_shrink = avg_tr3 < 3.0
-            # 【性能优化 V3】向量化替代 iterrows fallback
-            # 主逻辑已完成向量化计算，此处为异常兜底
-            try:
+            except Exception:
+                # 兜底：改用纯 NumPy 数组计算
                 vol3_arr = pd.to_numeric(df_tail3["vol"], errors="coerce").fillna(0).to_numpy()
                 close3_arr = pd.to_numeric(df_tail3["close"], errors="coerce").fillna(0).to_numpy()
                 cm3_arr = pd.to_numeric(df_tail3["circ_mv"], errors="coerce").fillna(0).to_numpy()
                 tr_f3_arr = pd.to_numeric(df_tail3["turnover_rate_f"], errors="coerce").fillna(0).to_numpy()
-                # 向量化计算近3日换手率
                 with np.errstate(divide='ignore', invalid='ignore'):
                     inferred_tr3_vec = np.where(
                         (tr_f3_arr > 0) | (cm3_arr <= 0) | (close3_arr <= 0),
@@ -193,9 +192,6 @@ class P4Tail:
                 valid_tr3 = inferred_tr3_vec[~np.isnan(inferred_tr3_vec)]
                 avg_tr3 = float(np.mean(valid_tr3)) if len(valid_tr3) > 0 else 0.0
                 turnover_shrink = avg_tr3 < 3.0
-            except Exception:
-                # 终极兜底：返回默认值
-                turnover_shrink = False
             macd_strong = float(curr.get("macd_diff", 0.0)) > float(curr.get("macd_dea", 0.0))
             if not macd_strong and "macd" in curr.index and "macd_signal" in curr.index:
                 macd_strong = float(curr.get("macd", 0.0)) > float(curr.get("macd_signal", 0.0))
@@ -671,13 +667,13 @@ class P4Tail:
             if next_day_confidence:
                 surge_bonus_val += min(6.0, max(-3.0, next_day_confidence))
 
-            bj_tz = timezone(timedelta(hours=8))
-            now_min = datetime.now(bj_tz).hour * 60 + datetime.now(bj_tz).minute
             pool_hint = str(rt.get("_pool_key", "")).lower()
-            if pool_hint in ("p4", "p5"):
-                is_p5_mode = pool_hint == "p5"
-            else:
-                is_p5_mode = now_min >= 900
+            # 【V26.6 修复】移除 now_min >= 900 自动 P5 模式切换。
+            # 原逻辑：若用户点 P4 按钮（pool_hint="p4"），但系统时间是 15:00 后，
+            # 自动触发 P5 增强逻辑（+3分奖励 或 +42分惩罚），导致 14:59 和 15:01 扫 P4 结果完全不同。
+            # 这违反了用户意图：用户点哪个池就应跑哪个池的逻辑，不应被时钟自动篡改。
+            # 修复：仅以 _pool_key 为准；P4 按钮 → P4 逻辑，P5 按钮 → P5 逻辑。
+            is_p5_mode = (pool_hint == "p5")
 
             if is_p5_mode:
                 positive_hits_before_p5 = len([h for h in hits if ("⚠️" not in h and "💀" not in h and "🩸" not in h)])
