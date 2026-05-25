@@ -249,7 +249,7 @@ def precompute_indicators(df):
             avg_loss_safe = avg_loss.replace(0, np.nan)
             rs = np.divide(avg_gain.values, avg_loss_safe.values,
                            where=(avg_loss_safe.values != 0), out=np.full_like(avg_gain.values, np.nan))
-            df[f"rsi_{period}"] = (100 - (100 / (1 + rs))).fillna(50)
+            df[f"rsi_{period}"] = pd.Series((100 - (100 / (1 + rs))), index=df.index).fillna(50)
 
         # 第六战区：KDJ
         low_list_9 = low.rolling(window=9, min_periods=1).min()
