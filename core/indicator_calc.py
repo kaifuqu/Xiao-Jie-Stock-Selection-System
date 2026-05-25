@@ -179,11 +179,8 @@ def precompute_indicators(df):
     全量计算单只股票的日线技术指标。
     传入的 df 必须包含: open, high, low, close, pre_close, vol(或volume), amount。
 
-    【性能优化 V2 要点】
-    - CCI：原 rolling().apply(lambda) 改为向量化 rolling std 公式，消除 Python lambda 开销
-    - replace(0,np.nan) 预计算：ma5/ma20/ma60 等列的 safe 版本只计算一次
-    - ATR：不创建 tr1/tr2/tr3/tr 四列，改用 concat().max(axis=1) 直接求 TR
-    - 列存在性预缓存：避免 6+ 次 "col" in df.columns 的 O(n) 查询
+    【V26.7 修复】所有除法均通过 np.divide(..., where=...) 显式零除保护，
+    并在入口处将 close/high/low/open 中为 0 的行替换为 NaN，防止停牌/缺失数据触发除零。
     """
     if df is None or df.empty or len(df) < 5:
         return df
@@ -193,6 +190,14 @@ def precompute_indicators(df):
 
         df.sort_values("trade_date", ascending=True, inplace=True)
         df.reset_index(drop=True, inplace=True)
+
+        # 【V26.7 新增】入口零值清洗：将价格列为 0 的行置 NaN，避免后续所有除法零除
+        for _pc in ("close", "high", "low", "open", "pre_close"):
+            if _pc in df.columns:
+                df.loc[df[_pc] == 0, _pc] = np.nan
+        # 强制 fillna 后再填充首行（避免全 NaN 列传播）
+        df.fillna(method="ffill", inplace=True)
+        df.fillna(0, inplace=True)
 
         # 【优化V2】列存在性预缓存：避免后续重复的 "col" in df.columns 查询
         has_vol = "vol" in df.columns
@@ -240,78 +245,87 @@ def precompute_indicators(df):
         for period in [6, 12, 24]:
             avg_gain = gain.rolling(window=period, min_periods=1).mean()
             avg_loss = loss.rolling(window=period, min_periods=1).mean()
-            rs = avg_gain / avg_loss.replace(0, np.nan)
+            # 【V26.7 修复】avg_loss 全为 0 时 replace 后仍为 NaN，np.divide 显式零除保护
+            avg_loss_safe = avg_loss.replace(0, np.nan)
+            rs = np.divide(avg_gain.values, avg_loss_safe.values,
+                           where=(avg_loss_safe.values != 0), out=np.full_like(avg_gain.values, np.nan))
             df[f"rsi_{period}"] = (100 - (100 / (1 + rs))).fillna(50)
 
         # 第六战区：KDJ
         low_list_9 = low.rolling(window=9, min_periods=1).min()
         high_list_9 = high.rolling(window=9, min_periods=1).max()
         rsv_denom = (high_list_9 - low_list_9).replace(0, np.nan)
-        rsv = ((close - low_list_9) / rsv_denom * 100).fillna(50)
-        df["k"] = rsv.ewm(com=2, adjust=False).mean()
+        rsv = np.divide((close - low_list_9).values, rsv_denom.values,
+                         where=(rsv_denom.values != 0), out=np.full_like(close.values, np.nan)) * 100
+        df["k"] = pd.Series(rsv, index=df.index).fillna(50).ewm(com=2, adjust=False).mean()
         df["d"] = df["k"].ewm(com=2, adjust=False).mean()
         df["j"] = 3 * df["k"] - 2 * df["d"]
 
         # 第七战区：核心海拔探测器（BIAS 系统）
-        # 【优化V2】预计算 ma5/ma20/ma60 safe 列，只 replace 一次复用
         ma5_safe = df["ma5"].replace(0, np.nan)
         ma20_safe = df["ma20"].replace(0, np.nan)
         ma60_safe = df["ma60"].replace(0, np.nan)
         ma120_safe = df["ma120"].replace(0, np.nan)
 
-        df["bias_5"] = (close - df["ma5"]) / ma5_safe * 100
-        df["bias_20"] = (close - df["ma20"]) / ma20_safe * 100
-        df["price_ma20_ratio"] = close / ma20_safe
+        df["bias_5"] = np.divide((close - df["ma5"]).values, ma5_safe.values,
+                                   where=(ma5_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100
+        df["bias_20"] = np.divide((close - df["ma20"]).values, ma20_safe.values,
+                                   where=(ma20_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100
+        df["price_ma20_ratio"] = np.divide(close.values, ma20_safe.values,
+                                             where=(ma20_safe.values != 0), out=np.full_like(close.values, np.nan))
 
-        # 【优化V2】复用 close.shift(1) 结果
         close_shift1 = close.shift(1).replace(0, np.nan)
         max_close_60 = close.rolling(window=60, min_periods=1).max()
-        df["max_60d_pct"] = (max_close_60 / close_shift1 - 1.0) * 100.0
+        cs1_safe = close_shift1.replace(0, np.nan)
+        df["max_60d_pct"] = (np.divide(max_close_60.values, cs1_safe.values,
+                                        where=(cs1_safe.values != 0), out=np.full_like(close.values, np.nan)) - 1.0) * 100.0
 
         min_low_60 = low.rolling(window=60, min_periods=1).min()
-        df["pct_from_60d_low"] = (close - min_low_60) / min_low_60.replace(0, np.nan) * 100.0
+        ml60_safe = min_low_60.replace(0, np.nan)
+        df["pct_from_60d_low"] = np.divide((close - min_low_60).values, ml60_safe.values,
+                                             where=(ml60_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
 
-        # 【优化V2】复用 high.rolling(60) 一次计算结果
-        roll_60_high = high.rolling(60, min_periods=1)
-        max_high_60 = roll_60_high.max()
-        df["dist_high_60"] = close / max_high_60.replace(0, np.nan)
+        max_high_60 = high.rolling(60, min_periods=1).max()
+        mh60_safe = max_high_60.replace(0, np.nan)
+        df["dist_high_60"] = np.divide(close.values, mh60_safe.values,
+                                         where=(mh60_safe.values != 0), out=np.full_like(close.values, np.nan))
 
-        roll_120_high = high.rolling(120, min_periods=1)
-        max_high_120 = roll_120_high.max()
-        df["dist_high_120"] = close / max_high_120.replace(0, np.nan)
+        max_high_120 = high.rolling(120, min_periods=1).max()
+        mh120_safe = max_high_120.replace(0, np.nan)
+        df["dist_high_120"] = np.divide(close.values, mh120_safe.values,
+                                          where=(mh120_safe.values != 0), out=np.full_like(close.values, np.nan))
 
         ma20_shifted_5 = df["ma20"].shift(5)
-        df["ma20_slope_5"] = (df["ma20"] - ma20_shifted_5) / ma20_shifted_5.replace(0, np.nan) * 100.0
+        ms5_safe = ma20_shifted_5.replace(0, np.nan)
+        df["ma20_slope_5"] = np.divide((df["ma20"] - ma20_shifted_5).values, ms5_safe.values,
+                                         where=(ms5_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
 
         ma60_shifted_5 = df["ma60"].shift(5)
-        df["ma60_slope_5"] = (df["ma60"] - ma60_shifted_5) / ma60_shifted_5.replace(0, np.nan) * 100.0
+        ms6_safe = ma60_shifted_5.replace(0, np.nan)
+        df["ma60_slope_5"] = np.divide((df["ma60"] - ma60_shifted_5).values, ms6_safe.values,
+                                         where=(ms6_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
 
-        df["ma_dispersion_60_120"] = (df["ma60"] - df["ma120"]) / ma120_safe * 100.0
+        df["ma_dispersion_60_120"] = np.divide((df["ma60"] - df["ma120"]).values, ma120_safe.values,
+                                                  where=(ma120_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
 
-        # 第八战区：CCI（向量化替代 rolling.apply(lambda)）
-        # 【优化V2】CCI 原计算：rolling(14).apply(lambda x: np.abs(x - x.mean()).mean())
-        # 改为向量化：std ≈ mean(abs(x - mean(x)))，使用 rolling std 近似 MAD
+        # 第八战区：CCI
         tp = (high + low + close) / 3.0
         ma_tp = tp.rolling(14, min_periods=1).mean()
-        # 使用 rolling std 作为 MAD 的近似（比 apply lambda 快 50-100 倍）
-        # 对于正态分布数据，std ≈ 1.25 * MAD，此处直接用 std 不做归一化（因子会被 CCI 公式吸收）
-        rolling_std = tp.rolling(14, min_periods=1).std()
-        # 为避免 std=0 时除零，对零 std 位置用 NaN 替代，再在 CCI 公式中被吸收
-        md = rolling_std.fillna(0.0)
+        rolling_std = tp.rolling(14, min_periods=1).std().fillna(0.0)
         cci_numerator = tp - ma_tp
-        cci_denominator = 0.015 * md
-        # 避免除以零：denominator 为 0 时结果置 NaN（后续 fillna(0) 处理）
+        cci_denominator = 0.015 * rolling_std
         df["cci"] = np.where(
             cci_denominator != 0,
             cci_numerator / cci_denominator,
             np.nan,
         )
 
-        # WR威廉指标（向量化）
+        # WR威廉指标
         highest_high_14 = high.rolling(14, min_periods=1).max()
         lowest_low_14 = low.rolling(14, min_periods=1).min()
-        denominator_wr = (highest_high_14 - lowest_low_14).replace(0, np.nan)
-        df["wr"] = ((highest_high_14 - close) / denominator_wr * 100)
+        wr_denom = (highest_high_14 - lowest_low_14).replace(0, np.nan)
+        df["wr"] = np.divide((highest_high_14 - close).values, wr_denom.values,
+                               where=(wr_denom.values != 0), out=np.full_like(close.values, np.nan)) * 100
 
         # VWAP
         if "amount" in df.columns and df["amount"].sum() > 0:
@@ -320,9 +334,7 @@ def precompute_indicators(df):
         else:
             df["vwap"] = (high + low + close) / 3.0
 
-        # 第九战区：ATR（优化版，不创建临时列）
-        # 【优化V2】原逻辑：创建 tr1/tr2/tr3/tr 四个中间列，再 drop
-        # 改为：直接 concat 求 max，消除中间列分配
+        # 第九战区：ATR
         if "pre_close" not in df.columns:
             df["pre_close"] = close.shift(1).fillna(open_price)
 
@@ -330,18 +342,15 @@ def precompute_indicators(df):
         tr1 = high - low
         tr2 = (high - pre_close_series).abs()
         tr3 = (low - pre_close_series).abs()
-        # 使用 concat + max(axis=1) 直接求 TR，避免创建中间 DataFrame 列
         tr_series = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr20 = tr_series.rolling(window=20, min_periods=1).mean()
         df["atr20"] = atr20
         df["atr"] = df["atr20"]
-        df["atr_pct"] = (atr20 / close.replace(0, np.nan)) * 100.0
+        close_safe = close.replace(0, np.nan)
+        df["atr_pct"] = np.divide(atr20.values, close_safe.values,
+                                    where=(close_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
 
         # 第十战区：数据后处理
-        # 【V26.6 优化】三步合一：replace → ffill → fillna 合并为 inplace 单次扫描，
-        # 避免 replace 创建临时数组、ffill 再扫描、fillna 再扫描的 3 倍开销。
-        # np.where 实现：inplace=True 同时完成 replace 和 fillna，ffill 再单独执行一次。
-        # 对于有 NaN 的 DataFrame（通常有数百列），此优化可节省 30–50% 后处理时间。
         try:
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
             df.ffill(inplace=True)
@@ -357,4 +366,6 @@ def precompute_indicators(df):
 
     except Exception as e:
         logging.error(f"指标计算发生致命异常: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return df
