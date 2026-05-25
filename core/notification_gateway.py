@@ -78,11 +78,7 @@ _MAX_MARKDOWN_CONTENT_LEN = 3800
 _REQUEST_TIMEOUT = (5.0, 15.0)
 
 # DeepSeek 分析建议兜底与提示词
-_DEEPSEEK_FALLBACK_ADVICE = (
-    "交易建议：观望\n"
-    "当前优势：数据暂不可用，请参考系统原始指标\n"
-    "当前不足：DeepSeek分析服务暂时不可用"
-)
+_DEEPSEEK_FALLBACK_ADVICE = "交易建议：观望\n当前优势：数据暂不可用，请参考系统原始指标\n当前不足：DeepSeek分析服务暂时不可用"
 _DEEPSEEK_SYSTEM_PROMPT = (
     "你是一位客观中立的A股市场数据分析师，仅基于用户提供的结构化数据进行事实性分析，"
     "不对任何投资方向预设立场，不提供买卖建议。"
