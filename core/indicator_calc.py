@@ -196,7 +196,7 @@ def precompute_indicators(df):
             if _pc in df.columns:
                 df.loc[df[_pc] == 0, _pc] = np.nan
         # 强制 fillna 后再填充首行（避免全 NaN 列传播）
-        df.fillna(method="ffill", inplace=True)
+        df.ffill(inplace=True)
         df.fillna(0, inplace=True)
 
         # 【优化V2】列存在性预缓存：避免后续重复的 "col" in df.columns 查询
