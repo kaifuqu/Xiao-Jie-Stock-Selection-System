@@ -78,7 +78,11 @@ _MAX_MARKDOWN_CONTENT_LEN = 3800
 _REQUEST_TIMEOUT = (5.0, 15.0)
 
 # DeepSeek 分析建议兜底与提示词
-_DEEPSEEK_FALLBACK_ADVICE = "暂无法分析，请参考系统原始指标。"
+_DEEPSEEK_FALLBACK_ADVICE = (
+    "交易建议：观望\n"
+    "当前优势：数据暂不可用，请参考系统原始指标\n"
+    "当前不足：DeepSeek分析服务暂时不可用"
+)
 _DEEPSEEK_SYSTEM_PROMPT = (
     "你是一位客观中立的A股市场数据分析师，仅基于用户提供的结构化数据进行事实性分析，"
     "不对任何投资方向预设立场，不提供买卖建议。"
@@ -562,7 +566,7 @@ def _safe_score_display(stock_dict: Dict[str, Any]) -> str:
 
 
 def _trim_deepseek_advice(raw: Any) -> str:
-    """浄洗 DeepSeek 返回，保留结构化三字段格式。"""
+    """净洗 DeepSeek 返回：去掉标记头 + 每行截断至60字（保留格式三段式）。"""
     try:
         text = str(raw or "").strip()
     except Exception:
@@ -573,8 +577,22 @@ def _trim_deepseek_advice(raw: Any) -> str:
     for prefix in ("【DeepSeek分析建议】", "DeepSeek分析建议", "```", "```json", "```text"):
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
-    # Preserve newlines, no merging, no truncation
-    return text.strip() or _DEEPSEEK_FALLBACK_ADVICE
+    # 三段式截断：每行超过60字则截断，并在末尾加…
+    lines = text.split("\n")
+    trimmed_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # 去掉行首可能残留的标号（如 "1. " 或 "关键数据摘录："）
+        line = line.lstrip("0123456789.、)） ")
+        # 截断至60字
+        if len(line) > 60:
+            line = line[:59] + "…"
+        if line:
+            trimmed_lines.append(line)
+    result = "\n".join(trimmed_lines)
+    return result.strip() or _DEEPSEEK_FALLBACK_ADVICE
 
 
 def _is_deepseek_empty_value(val: Any) -> bool:
@@ -1197,13 +1215,13 @@ def _maybe_get_deepseek_advice(pool_key: str, stock_dict: Dict[str, Any]) -> str
             f"分析侧重点：{pool_focus}\n"
             "你将看到池子说明与战法知识库。请仅基于以下结构化数据提取关键信息，"
             "严格区分【已确认事实】与【基于经验的推测】，不输出任何买卖建议。"
-            "请按以下格式返回（必须包含三个字段）：\n"
-            "关键数据摘录：[列出3-5个核心指标及其数值]\n"
-            "值得关注的现象：[列出2-3个值得留意的数据特征，注明正面或负面]\n"
-            "数据空白与不确定性：[列出1-2个因数据缺失导致无法判断的点]"
+            "请严格按以下三行格式返回，每行不超过60字，不输出其他内容：\n"
+            "交易建议：[根据量价与基本面给出简洁建议，如：可关注/观望/谨慎]\n"
+            "当前优势：[列出1-2个核心正面数据，不超过60字]\n"
+            "当前不足：[列出1-2个核心风险点，不超过60字]"
         )
         if concise_retry:
-            user_prompt += "本次是最终结论重试，请只输出上述三行格式，不要展开思考过程，不输出任何买卖建议。"
+            user_prompt += "本次是最终结论重试，请只输出上述三行格式，每行不超过60字，不要展开思考过程，不输出任何买卖建议。"
         else:
             user_prompt += "基于具体数值进行描述，不附加买卖建议。"
         user_prompt += f"\n股票信息如下：\n{stock_info}"
