@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.6 - 极速分发引擎（P1–P5 全池扫描中枢）
+小杰AI选股系统 Pro V26.7 - 极速分发引擎（P1–P5 全池扫描中枢）
 
 【P1 初筛与多维分项平滑分（与 pool_manager 同口径）】
 - 市值：流通市值低于 get_p1_select_min_circ_mv_wan（config/constants）所对应亿元门槛的标的，在战法循环前直接剔除；
@@ -3316,6 +3316,33 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                                     _pt = str(b.get("操盘提示", "") or "").strip()
                                     _add = "P3右侧确认"
                                     b["操盘提示"] = f"{_pt} | {_add}" if _pt and _pt != "--" else _add
+                        # 【V26.7 增强】P3 告警补充四项关键数据：VWAP偏离、均线位置、主力净额、MACD状态
+                        if pool_key == "p3":
+                            # 1) VWAP 偏离
+                            _vw = _safe_float(rt.get("vwap"), 0.0)
+                            _now_p = _safe_float(rt.get("price"), 0.0)
+                            if _vw > 0 and _now_p > 0:
+                                _vw_dev = (_now_p - _vw) / _vw * 100.0
+                                b["vwap_dev_pct"] = round(_vw_dev, 2)
+                                b["vwap"] = round(_vw, 3)
+                            # 2) 均线位置（从 df_target 读取）
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _ma in ("ma5", "ma10", "ma20", "ma60"):
+                                    if _ma in _curr and not pd.isna(_curr[_ma]):
+                                        _px_vs_ma = (_now_p - float(_curr[_ma])) / max(float(_curr[_ma]), 1e-9) * 100.0
+                                        b[f"{_ma}_dev_pct"] = round(_px_vs_ma, 2)
+                                        b[_ma] = round(float(_curr[_ma]), 3)
+                            # 3) 主力净额（昨日结算，非实时）
+                            _net_main = _safe_float(rt.get("net_main_amount", hist.get("net_main_amount", 0.0)), 0.0)
+                            if _net_main != 0.0:
+                                b["net_main_amount"] = round(_net_main / 10000.0, 2)  # 转为万元
+                            # 4) MACD 状态
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _mkey in ("macd_dif", "macd_dea", "macd_bar"):
+                                    if _mkey in _curr and not pd.isna(_curr[_mkey]):
+                                        b[_mkey] = round(float(_curr[_mkey]), 4)
                         b["拥挤度"] = f"{crowd_score:.0f}({crowd_label})"
                         if crowd_mult < 1.0:
                             _tag_c = str(b.get("风险标签", "") or "").strip()

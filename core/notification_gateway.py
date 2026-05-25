@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.6 — 企微 Webhook 异步推送网关（与选股引擎解耦）
+小杰AI选股系统 Pro V26.7 — 企微 Webhook 异步推送网关（与选股引擎解耦）
 
 设计要点：
 - 仅使用企业微信机器人 markdown 消息；发送在 **max_workers=3 的全局 ThreadPoolExecutor** 中执行，不阻塞调用方。
@@ -1344,7 +1344,7 @@ def format_wechat_markdown(pool_key: str, stock_dict: Dict[str, Any]) -> str:
         tier = str(stock_dict.get("pool_tier", "") or "")
         pool_source = str(stock_dict.get("pool_source", "") or "")
         zhanfa = str(stock_dict.get("战法", "") or "")
-        version_tag = "V26.6"
+        version_tag = "V26.7"
         if tier == "observation" or "【缩量期备选】" in zhanfa:
             title = f"{version_tag} {emoji} 【{zone_name}·观察池】信号触发"
         elif pool_source == "直通车" or tier == "fastlane":
@@ -1464,6 +1464,36 @@ def format_wechat_markdown(pool_key: str, stock_dict: Dict[str, Any]) -> str:
             f'- <font color="comment">涨幅</font>：<font color="comment">{pct_line}</font>',
             f'- <font color="comment">综合分</font>：<font color="comment">{score_line}</font>',
         ]
+        # 【V26.7 增强】P3 盘中告警补充四项关键数据
+        if pool_name == "P3":
+            _vwap = _finite_float_or_none(stock_dict.get("vwap"))
+            _vwap_dev = _finite_float_or_none(stock_dict.get("vwap_dev_pct"))
+            if _vwap is not None and _vwap_dev is not None:
+                _vwap_color = "warning" if _vwap_dev > 0 else "info"
+                _vwap_dev_str = f"{_vwap_dev:+.2f}%"
+                lines.append(f'- <font color="comment">VWAP均价</font>：<font color="comment">{_vwap:.3f}</font>  <font color="comment">偏离</font>：<font color="{_vwap_color}">{_vwap_dev_str}</font>')
+            _ma_fields = [("ma5", "MA5"), ("ma10", "MA10"), ("ma20", "MA20"), ("ma60", "MA60")]
+            _ma_parts = []
+            for _k, _label in _ma_fields:
+                _ma_val = _finite_float_or_none(stock_dict.get(_k))
+                _ma_dev = _finite_float_or_none(stock_dict.get(f"{_k}_dev_pct"))
+                if _ma_val is not None and _ma_dev is not None:
+                    _mc = "warning" if _ma_dev > 0 else "info"
+                    _ma_parts.append(f'{_label}={_ma_val:.2f}({_ma_dev:+.1f}%)')
+            if _ma_parts:
+                lines.append(f'- <font color="comment">均线位置</font>：<font color="comment">{"  ".join(_ma_parts)}</font>')
+            _net_main = _finite_float_or_none(stock_dict.get("net_main_amount"))
+            if _net_main is not None:
+                _nm_color = "warning" if _net_main > 0 else "info"
+                _nm_arrow = "▲" if _net_main > 0 else "▼"
+                lines.append(f'- <font color="comment">主力净额(万)</font>：<font color="{_nm_color}">{_nm_arrow}{abs(_net_main):.1f}万</font>  <font color="comment">(昨)</font>')
+            _macd_bar = _finite_float_or_none(stock_dict.get("macd_bar"))
+            _macd_dif = _finite_float_or_none(stock_dict.get("macd_dif"))
+            _macd_dea = _finite_float_or_none(stock_dict.get("macd_dea"))
+            if _macd_bar is not None and _macd_dif is not None and _macd_dea is not None:
+                _mc_state = "红柱" if _macd_bar > 0 else "绿柱"
+                _mc_color = "warning" if _macd_bar > 0 else "info"
+                lines.append(f'- <font color="comment">MACD</font>：<font color="{_mc_color}">{_mc_state}({_macd_bar:.4f})</font>  <font color="comment">DIF={_macd_dif:.4f} DEA={_macd_dea:.4f}</font>')
         if entry_reason:
             lines.append(f'- <font color="comment">入池理由</font>：<font color="warning">{entry_reason}</font>')
         if hot_sector_text:
@@ -1677,7 +1707,7 @@ class WechatNotificationGateway:
         cls = str(cl).strip() or "--"
         body = "\n".join(
             [
-                f"🟢 【小杰AI选股系统 Pro V26.6】早安！系统已唤醒 [{_bj_now_str('%H:%M:%S')}]",
+                f"🟢 【小杰AI选股系统 Pro V26.7】早安！系统已唤醒 [{_bj_now_str('%H:%M:%S')}]",
                 "今日为交易日，各项数据已就绪。",
                 f"🎛️ 企微推送：{wls}",
                 f"🤖 自动巡航：{cls}",
