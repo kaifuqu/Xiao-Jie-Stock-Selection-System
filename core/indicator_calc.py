@@ -9,7 +9,7 @@
    避免每列计算时都创建新的 Series 副本。7+ 次 Series 拷贝减少为 3 次。
 3. ATR临时列优化：不再创建 tr1/tr2/tr3/tr 四列，而是用 concat().max(axis=1) 直接求 TR，
    消除中间列的 DataFrame 分配开销，减少内存峰值。
-4. 列存在性预缓存：在函数入口一次性检查并缓存各列是否存在，避免 6+ 次重复的 `"col" in df.columns` 查询。
+4. 列存在性预缓存：在函数入口一次性检查并缓存各列是否存在，避免 6+ 次重复的 "col" in df.columns 查询。
 5. _sf()优化：移除了 str().strip() 的冗余调用，保留 isna/nan 检测路径不变。
 6. 保留所有业务逻辑不变，仅优化执行效率。
 
@@ -20,6 +20,8 @@
    盘中合并时 **high/low 不采用 rt 全日最高最低**，
    以免 KDJ/布林/ATR 等 rolling 指标在收盘前「偷看」当日振幅（维度1 数据口径）。
 3. Pandas 规范：ffill() 替代已弃用的 fillna(method='ffill')。
+4. 【V26.7 修复】所有 np.divide(where=...) 改为 _fd() 安全除法，
+   避免 object dtype .values 数组含 None 导致 "unsupported operand type / 'NoneType'" 崩溃。
 """
 from __future__ import annotations
 
@@ -43,6 +45,28 @@ def _sf(val, default=0.0):
         return float(val)
     except (TypeError, ValueError):
         return default
+
+
+def _fa(series):
+    """
+    将 Series 转为 float64 numpy array，将 0 替换为 np.nan。
+    彻底消除 object dtype / None 导致 np.divide 崩溃的问题。
+    """
+    arr = series.values.astype(np.float64)
+    arr[arr == 0] = np.nan
+    return arr
+
+
+def _fd(numerator, denominator, fill=np.nan):
+    """
+    安全除法：分母为 0 / NaN 或分子为 NaN 时，结果填充 fill。
+    numerator / denominator: numpy arrays, same shape.
+    fill: scalar (np.nan 或具体数值如 50.0)。
+    """
+    mask = (denominator != 0) & ~np.isnan(denominator) & ~np.isnan(numerator)
+    result = np.full_like(numerator, fill, dtype=np.float64)
+    result[mask] = numerator[mask] / denominator[mask]
+    return result
 
 
 def _intraday_ohlc_high_low(price: float, pre_close: float, open_px: float) -> tuple:
@@ -161,8 +185,8 @@ def merge_daily_with_realtime(df, rt):
         new_row["close"] = price
         if vol_col is not None:
             new_row[vol_col] = vol_hand if vol_hand > 0 else _sf(new_row.get(vol_col), 0.0)
-        if "amount" in new_row.index and _sf(rt.get("amount"), 0) > 0:
-            new_row["amount"] = _sf(rt.get("amount")) / 10000.0
+        if "amount" in new_row.index and _sf(rt.get("amount"), 0.0) > 0:
+            new_row["amount"] = _sf(rt.get("amount"), 0.0) / 10000.0
         pc2 = float(new_row.get("pre_close") or prev_close)
         if "pct_chg" in new_row.index and pc2 > 0:
             new_row["pct_chg"] = (price - pc2) / max(pc2, 1e-9) * 100.0
@@ -179,8 +203,12 @@ def precompute_indicators(df):
     全量计算单只股票的日线技术指标。
     传入的 df 必须包含: open, high, low, close, pre_close, vol(或volume), amount。
 
-    【V26.7 修复】所有除法均通过 np.divide(..., where=...) 显式零除保护，
-    并在入口处将 close/high/low/open 中为 0 的行替换为 NaN，防止停牌/缺失数据触发除零。
+    【V26.7 修复】
+    1. _fd() 安全除法：替代 np.divide(where=...)，
+       避免 object dtype .values 数组含 None 导致 "unsupported operand type / 'NoneType'" 崩溃。
+    2. _fa() 安全数组：替代 Series.replace(0, np.nan).values，
+       保证始终返回 float64 且零值正确转为 NaN。
+    3. 入口零值清洗：将 price 列中为 0 的行置 NaN，避免停牌数据触发除零。
     """
     if df is None or df.empty or len(df) < 5:
         return df
@@ -191,15 +219,13 @@ def precompute_indicators(df):
         df.sort_values("trade_date", ascending=True, inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        # 【V26.7 新增】入口零值清洗：将价格列为 0 的行置 NaN，避免后续所有除法零除
+        # 【V26.7 新增】入口零值清洗：将价格列为 0 的行置 NaN
         for _pc in ("close", "high", "low", "open", "pre_close"):
             if _pc in df.columns:
                 df.loc[df[_pc] == 0, _pc] = np.nan
-        # 强制 fillna 后再填充首行（避免全 NaN 列传播）
         df.ffill(inplace=True)
         df.fillna(0, inplace=True)
 
-        # 【优化V2】列存在性预缓存：避免后续重复的 "col" in df.columns 查询
         has_vol = "vol" in df.columns
         vol_col = "vol" if has_vol else "volume"
 
@@ -240,92 +266,70 @@ def precompute_indicators(df):
 
         # 第五战区：RSI
         delta = close.diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
+        gain = delta.where(delta > 0, 0.0)
+        loss = (-delta).where(delta < 0, 0.0)
         for period in [6, 12, 24]:
             avg_gain = gain.rolling(window=period, min_periods=1).mean()
             avg_loss = loss.rolling(window=period, min_periods=1).mean()
-            # 【V26.7 修复】avg_loss 全为 0 时 replace 后仍为 NaN，np.divide 显式零除保护
-            avg_loss_safe = avg_loss.replace(0, np.nan)
-            rs = np.divide(avg_gain.values, avg_loss_safe.values,
-                           where=(avg_loss_safe.values != 0), out=np.full_like(avg_gain.values, np.nan))
-            df[f"rsi_{period}"] = pd.Series((100 - (100 / (1 + rs))), index=df.index).fillna(50)
+            rs_vals = _fd(_fa(avg_gain), _fa(avg_loss), fill=np.nan)
+            df[f"rsi_{period}"] = pd.Series(100 - (100 / (1 + rs_vals)), index=df.index).fillna(50.0)
 
         # 第六战区：KDJ
         low_list_9 = low.rolling(window=9, min_periods=1).min()
         high_list_9 = high.rolling(window=9, min_periods=1).max()
-        rsv_denom = (high_list_9 - low_list_9).replace(0, np.nan)
-        rsv = np.divide((close - low_list_9).values, rsv_denom.values,
-                         where=(rsv_denom.values != 0), out=np.full_like(close.values, np.nan)) * 100
-        df["k"] = pd.Series(rsv, index=df.index).fillna(50).ewm(com=2, adjust=False).mean()
+        rsv_vals = _fd(_fa(close) - _fa(low_list_9), _fa(high_list_9) - _fa(low_list_9), fill=np.nan) * 100
+        k_vals = pd.Series(rsv_vals, index=df.index).fillna(50.0).ewm(com=2, adjust=False).mean()
+        df["k"] = k_vals
         df["d"] = df["k"].ewm(com=2, adjust=False).mean()
         df["j"] = 3 * df["k"] - 2 * df["d"]
 
         # 第七战区：核心海拔探测器（BIAS 系统）
-        ma5_safe = df["ma5"].replace(0, np.nan)
-        ma20_safe = df["ma20"].replace(0, np.nan)
-        ma60_safe = df["ma60"].replace(0, np.nan)
-        ma120_safe = df["ma120"].replace(0, np.nan)
+        close_v = _fa(close)
+        ma5_v = _fa(df["ma5"])
+        ma20_v = _fa(df["ma20"])
+        ma60_v = _fa(df["ma60"])
+        ma120_v = _fa(df["ma120"])
 
-        df["bias_5"] = np.divide((close - df["ma5"]).values, ma5_safe.values,
-                                   where=(ma5_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100
-        df["bias_20"] = np.divide((close - df["ma20"]).values, ma20_safe.values,
-                                   where=(ma20_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100
-        df["price_ma20_ratio"] = np.divide(close.values, ma20_safe.values,
-                                             where=(ma20_safe.values != 0), out=np.full_like(close.values, np.nan))
+        df["bias_5"] = _fd(close_v - ma5_v, ma5_v, fill=np.nan) * 100
+        df["bias_20"] = _fd(close_v - ma20_v, ma20_v, fill=np.nan) * 100
+        df["price_ma20_ratio"] = _fd(close_v, ma20_v, fill=np.nan)
 
-        close_shift1 = close.shift(1).replace(0, np.nan)
-        max_close_60 = close.rolling(window=60, min_periods=1).max()
-        cs1_safe = close_shift1.replace(0, np.nan)
-        df["max_60d_pct"] = (np.divide(max_close_60.values, cs1_safe.values,
-                                        where=(cs1_safe.values != 0), out=np.full_like(close.values, np.nan)) - 1.0) * 100.0
+        # max_60d_pct：当日收盘 / 60日前收盘 - 1
+        close_s1 = _fa(close.shift(1))
+        max_close_60 = close.rolling(window=60, min_periods=1).max().values.astype(np.float64)
+        df["max_60d_pct"] = (_fd(max_close_60, close_s1, fill=np.nan) - 1.0) * 100.0
 
-        min_low_60 = low.rolling(window=60, min_periods=1).min()
-        ml60_safe = min_low_60.replace(0, np.nan)
-        df["pct_from_60d_low"] = np.divide((close - min_low_60).values, ml60_safe.values,
-                                             where=(ml60_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
+        # pct_from_60d_low
+        min_low_60 = low.rolling(window=60, min_periods=1).min().values.astype(np.float64)
+        df["pct_from_60d_low"] = _fd(close_v - min_low_60, min_low_60, fill=np.nan) * 100.0
 
-        max_high_60 = high.rolling(60, min_periods=1).max()
-        mh60_safe = max_high_60.replace(0, np.nan)
-        df["dist_high_60"] = np.divide(close.values, mh60_safe.values,
-                                         where=(mh60_safe.values != 0), out=np.full_like(close.values, np.nan))
+        # dist_high_60 / dist_high_120
+        max_high_60 = high.rolling(60, min_periods=1).max().values.astype(np.float64)
+        max_high_120 = high.rolling(120, min_periods=1).max().values.astype(np.float64)
+        df["dist_high_60"] = _fd(close_v, max_high_60, fill=np.nan)
+        df["dist_high_120"] = _fd(close_v, max_high_120, fill=np.nan)
 
-        max_high_120 = high.rolling(120, min_periods=1).max()
-        mh120_safe = max_high_120.replace(0, np.nan)
-        df["dist_high_120"] = np.divide(close.values, mh120_safe.values,
-                                          where=(mh120_safe.values != 0), out=np.full_like(close.values, np.nan))
+        # MA slope
+        ma20_s5 = _fa(df["ma20"].shift(5))
+        ma60_s5 = _fa(df["ma60"].shift(5))
+        df["ma20_slope_5"] = _fd(_fa(df["ma20"]) - ma20_s5, ma20_s5, fill=np.nan) * 100.0
+        df["ma60_slope_5"] = _fd(_fa(df["ma60"]) - ma60_s5, ma60_s5, fill=np.nan) * 100.0
 
-        ma20_shifted_5 = df["ma20"].shift(5)
-        ms5_safe = ma20_shifted_5.replace(0, np.nan)
-        df["ma20_slope_5"] = np.divide((df["ma20"] - ma20_shifted_5).values, ms5_safe.values,
-                                         where=(ms5_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
-
-        ma60_shifted_5 = df["ma60"].shift(5)
-        ms6_safe = ma60_shifted_5.replace(0, np.nan)
-        df["ma60_slope_5"] = np.divide((df["ma60"] - ma60_shifted_5).values, ms6_safe.values,
-                                         where=(ms6_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
-
-        df["ma_dispersion_60_120"] = np.divide((df["ma60"] - df["ma120"]).values, ma120_safe.values,
-                                                  where=(ma120_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
+        df["ma_dispersion_60_120"] = _fd(ma60_v - ma120_v, ma120_v, fill=np.nan) * 100.0
 
         # 第八战区：CCI
         tp = (high + low + close) / 3.0
         ma_tp = tp.rolling(14, min_periods=1).mean()
         rolling_std = tp.rolling(14, min_periods=1).std().fillna(0.0)
-        cci_numerator = tp - ma_tp
-        cci_denominator = 0.015 * rolling_std
-        df["cci"] = np.where(
-            cci_denominator != 0,
-            cci_numerator / cci_denominator,
-            np.nan,
-        )
+        cci_denom = 0.015 * rolling_std
+        denom_vals = _fa(cci_denom)
+        df["cci"] = _fd(_fa(tp) - _fa(ma_tp), denom_vals, fill=0.0)
 
         # WR威廉指标
         highest_high_14 = high.rolling(14, min_periods=1).max()
         lowest_low_14 = low.rolling(14, min_periods=1).min()
-        wr_denom = (highest_high_14 - lowest_low_14).replace(0, np.nan)
-        df["wr"] = np.divide((highest_high_14 - close).values, wr_denom.values,
-                               where=(wr_denom.values != 0), out=np.full_like(close.values, np.nan)) * 100
+        wr_denom = _fa(highest_high_14) - _fa(lowest_low_14)
+        df["wr"] = _fd(_fa(highest_high_14) - close_v, wr_denom, fill=np.nan) * 100
 
         # VWAP
         if "amount" in df.columns and df["amount"].sum() > 0:
@@ -346,9 +350,7 @@ def precompute_indicators(df):
         atr20 = tr_series.rolling(window=20, min_periods=1).mean()
         df["atr20"] = atr20
         df["atr"] = df["atr20"]
-        close_safe = close.replace(0, np.nan)
-        df["atr_pct"] = np.divide(atr20.values, close_safe.values,
-                                    where=(close_safe.values != 0), out=np.full_like(close.values, np.nan)) * 100.0
+        df["atr_pct"] = _fd(_fa(atr20), _fa(close), fill=np.nan) * 100.0
 
         # 第十战区：数据后处理
         try:
@@ -365,7 +367,7 @@ def precompute_indicators(df):
         return df
 
     except Exception as e:
-        logging.error(f"指标计算发生致命异常: {e}")
+        logging.error("指标计算发生致命异常: %s", e)
         import traceback
         logging.error(traceback.format_exc())
         return df
