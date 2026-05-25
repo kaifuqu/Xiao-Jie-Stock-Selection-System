@@ -2078,11 +2078,11 @@ def _spawn(
 
 
 def _job_p3_tick() -> None:
-    """P3：仅非阻塞抢锁；与 P4 尾盘窗互斥逻辑在 clock_aligned 层处理。"""
+    """P3：带超时抢锁（最多等60s），防止前一次任务崩溃后锁未释放导致永久死锁。"""
     if not _daemon_is_trading_day_safe():
         logger.info("非交易日，跳过: P3巡逻")
         return
-    _spawn("P3", _run_scan_push_p3, wait_for_lock_sec=None)
+    _spawn("P3", _run_scan_push_p3, wait_for_lock_sec=60.0)
 
 
 def _job_p3_tick_clock_aligned() -> None:

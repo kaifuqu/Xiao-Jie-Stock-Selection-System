@@ -342,9 +342,16 @@ def precompute_indicators(df):
         # 避免 replace 创建临时数组、ffill 再扫描、fillna 再扫描的 3 倍开销。
         # np.where 实现：inplace=True 同时完成 replace 和 fillna，ffill 再单独执行一次。
         # 对于有 NaN 的 DataFrame（通常有数百列），此优化可节省 30–50% 后处理时间。
-        df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        df.ffill(inplace=True)
-        df.fillna(0, inplace=True)
+        try:
+            df.replace([np.inf, -np.inf], np.nan, inplace=True)
+            df.ffill(inplace=True)
+            df.fillna(0, inplace=True)
+        except Exception as e:
+            logging.warning("指标后处理 ffill/fillna 异常（已降级返回）: %s", e)
+            try:
+                df.fillna(0, inplace=True)
+            except Exception:
+                pass
 
         return df
 
