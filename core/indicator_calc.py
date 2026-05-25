@@ -246,7 +246,8 @@ def precompute_indicators(df):
         # 第六战区：KDJ
         low_list_9 = low.rolling(window=9, min_periods=1).min()
         high_list_9 = high.rolling(window=9, min_periods=1).max()
-        rsv = ((close - low_list_9) / (high_list_9 - low_list_9).replace(0, np.nan) * 100).fillna(50)
+        rsv_denom = (high_list_9 - low_list_9).replace(0, np.nan)
+        rsv = ((close - low_list_9) / rsv_denom * 100).fillna(50)
         df["k"] = rsv.ewm(com=2, adjust=False).mean()
         df["d"] = df["k"].ewm(com=2, adjust=False).mean()
         df["j"] = 3 * df["k"] - 2 * df["d"]
