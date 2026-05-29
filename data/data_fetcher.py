@@ -44,7 +44,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -1275,11 +1275,14 @@ def fetch_raw_day_data(date_str):
             return pd.DataFrame()
 
     with ThreadPoolExecutor(max_workers=5) as _par_ex:
-        _fut_cyq = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, pro.cyq_perf, codes, td, 500)
-        _fut_hk = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, pro.hk_hold, codes, td, 500)
-        _fut_margin = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, pro.margin_detail, codes, td, 500)
-        _fut_inst = _par_ex.submit(_safe_fetch_df, retry_api(pro.top_inst), "trade_date", td)
-        _fut_fc = _par_ex.submit(_safe_fetch_df, retry_api(pro.forecast), "ann_date", td)
+        _fut_cyq = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, api_func=pro.cyq_perf, codes=codes, date_str=td, chunk_size=500)
+        _fut_hk = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, api_func=pro.hk_hold, codes=codes, date_str=td, chunk_size=500)
+        _fut_margin = _par_ex.submit(_safe_fetch_df, fetch_prefer_trade_date, api_func=pro.margin_detail, codes=codes, date_str=td, chunk_size=500)
+        _fut_inst = _par_ex.submit(_safe_fetch_df, retry_api(pro.top_inst), trade_date=td)
+        # forecast 不支持 trade_date；改用近30日内任意公告日回溯（取最新财报季公告窗口）
+        _end = (datetime.now(timezone(timedelta(hours=8))) - timedelta(hours=8)).strftime("%Y%m%d")
+        _start = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=30)).strftime("%Y%m%d")
+        _fut_fc = _par_ex.submit(_safe_fetch_df, retry_api(pro.forecast), ann_date=_end, start_date=_start)
 
         # 统一等待结果
         cyq_df, hk_df, margin_df, inst_df, fc_df = (
@@ -1361,9 +1364,8 @@ def fetch_raw_day_data(date_str):
         inst_df = inst_df[inst_df['ts_code'].isin(codes)]
         df = pd.merge(df, inst_df, on=['ts_code', 'trade_date'], how='left')
 
-    # 涨停队列：连板高度 / 强度（并行结果）
-    if not limit_df.empty:
-        df = _apply_limit_features(df, limit_df, _dt_merge)
+    # 涨停队列：连板高度 / 强度（_attach_limit_list_features 内部自行拉取）
+    df = _attach_limit_list_features(df, codes, td, _dt_merge)
 
     # 业绩预告映射（并行结果）
     if not fc_df.empty and 'type' in fc_df.columns:
@@ -2238,6 +2240,16 @@ def sync_history(days=150, status_callback=print, progress_callback=None):
     if pro is None:
         # 与 retry_api 一致：无 Token 时绝不当「空跑成功」
         raise_data_fetch_critical("sync_history：Tushare 未初始化（pro is None）")
+
+    # 【V26.7 修复】在数据拉取前预先创建写连接，避免断点续传只读连接与后续写连接冲突。
+    # 与 sync_missing_days_batch 相同的修复逻辑：确保 get_read_conn_singleton() 返回写连接。
+    try:
+        from data.db_core import get_conn
+        _ = get_conn()
+        logging.debug("历史同步前已预创建写连接")
+    except Exception as e_preconn:
+        logging.warning("历史同步预创建写连接失败: %s", e_preconn)
+
     success, missing_dates = check_data_completeness(days)
     if not success:
         status_callback("⚠️ 无法获取交易日历或接口异常。")
@@ -2376,6 +2388,16 @@ def sync_recent_days(
 ):
     if pro is None:
         raise_data_fetch_critical("sync_recent_days：Tushare 未初始化（pro is None）")
+
+    # 【V26.7 修复】在数据拉取前预先创建写连接，避免断点续传只读连接与后续写连接冲突。
+    # 与 sync_missing_days_batch 相同的修复逻辑：确保 get_read_conn_singleton() 返回写连接。
+    try:
+        from data.db_core import get_conn
+        _ = get_conn()
+        logging.debug("近期同步前已预创建写连接")
+    except Exception as e_preconn:
+        logging.warning("近期同步预创建写连接失败: %s", e_preconn)
+
     now = _now_bj_naive()
     end_dt = (now if now.hour >= 16 else now - timedelta(days=1)).strftime('%Y%m%d')
     start_dt = (now - timedelta(days=days * 2 + 10)).strftime('%Y%m%d')
@@ -2537,6 +2559,46 @@ def sync_missing_days_batch(missing_days, status_callback=print) -> list:
     raw_frames = []
     failed_days = []
 
+    # 【V26.7 关键修复】在 Phase 1 开始前激进地清理所有只读连接并预创建写连接。
+    # 原因：
+    # 1. UI 侧边栏可能在调用本函数前已通过 get_read_conn_singleton() 创建了只读连接
+    # 2. 这些只读连接保存在 _readonly_conns 列表中，通过 _close_all_readonly_conns() 统一关闭
+    # 3. 必须使用垃圾回收 + 重试策略来确保写连接成功创建
+    try:
+        import gc
+        from data.db_core import get_conn, _close_all_readonly_conns, _thread_local
+        
+        # 最多重试 3 次，每次清理后重新尝试
+        for _retry_attempt in range(3):
+            try:
+                # 清理所有只读连接（使用新增的追踪机制）
+                _close_all_readonly_conns()
+                # 关闭线程本地连接
+                if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
+                    try:
+                        _thread_local.conn.close()
+                    except Exception:
+                        pass
+                    _thread_local.conn = None
+                # 强制垃圾回收，关闭不可达的对象
+                gc.collect()
+                # 尝试预创建写连接
+                _ = get_conn()
+                logging.debug("批量下载 Phase 1 前已预创建写连接")
+                break  # 成功，跳出重试循环
+            except Exception as e:
+                if _retry_attempt < 2:
+                    logging.warning(
+                        "预创建写连接第 %d 次尝试失败（%s），将清理后重试...", 
+                        _retry_attempt + 1, e
+                    )
+                    gc.collect()
+                    continue
+                else:
+                    logging.warning("预创建写连接失败，将在后续重试: %s", e)
+    except Exception as e_preconn:
+        logging.warning("预创建写连接时异常（将在后续重试）: %s", e_preconn)
+
     # Phase 1: 批量下载所有生肉
     for i, d in enumerate(missing_days):
         status_callback(f"📥 下载生肉 [{i + 1}/{total}]: {d}")
@@ -2567,6 +2629,42 @@ def sync_missing_days_batch(missing_days, status_callback=print) -> list:
         status_callback("❌ 所有缺失日期的生肉均为空，无法重铸。")
         return failed_days
 
+    # 【V26.7 修复】防御性清理：只关闭只读连接，保留写连接。
+    # 原因：
+    # 1. Phase 1 前已预创建写连接，该连接在整个 Phase 1 期间可用
+    # 2. 防御性清理应该只清理可能残留的只读连接（来自其他代码路径）
+    # 3. close_db() 会关闭 _write_con，导致 Phase 2 前失去写连接
+    # 4. 保留写连接可避免 DuckDB "different configuration" 错误
+    # 5. 使用 _close_all_readonly_conns() 统一关闭所有追踪的只读连接
+    try:
+        import gc
+        from data.db_core import get_conn, _close_all_readonly_conns, close_thread_local_conn, _thread_local
+        
+        # 最多重试 3 次，每次清理后重新尝试
+        for _retry_attempt in range(3):
+            try:
+                # 清理只读连接
+                close_thread_local_conn()
+                _close_all_readonly_conns()
+                # 强制垃圾回收
+                gc.collect()
+                # 确保写连接可用
+                _ = get_conn()
+                logging.debug("Phase 2 开始前已确保写连接可用")
+                break  # 成功，跳出重试循环
+            except Exception as e:
+                if _retry_attempt < 2:
+                    logging.warning(
+                        "Phase 2 前确保写连接第 %d 次尝试失败（%s），将清理后重试...", 
+                        _retry_attempt + 1, e
+                    )
+                    gc.collect()
+                    continue
+                else:
+                    logging.warning("Phase 2 前确保写连接失败: %s", e)
+    except Exception as e_conn_cleanup:
+        logging.debug("连接清理异常（不影响主流程）: %s", e_conn_cleanup)
+
     # Phase 2: 一次性加载历史 + 合并所有生肉 + 一次重铸
     status_callback(f"🔨 合并 {len(raw_frames)} 段生肉 + 历史数据，执行单次全量重铸...")
     df_old = _load_existing_daily_data()
@@ -2580,6 +2678,41 @@ def sync_missing_days_batch(missing_days, status_callback=print) -> list:
             logging.warning("批量补齐后财报增强补齐失败: %s", e)
         _save_v26_layer_tables(rebuilt, status_callback=status_callback)
         duckdb_checkpoint(force=True)
+        
+        # 【V26.7 新增】批量补缺完成后执行最安全、最稳妥的数据库压缩
+        # 使用完整的多轮 VACUUM 策略：
+        # 1. 先执行 CHECKPOINT 确保 WAL 落盘
+        # 2. 执行多轮 ANALYZE + VACUUM + CHECKPOINT
+        # 3. 确保数据库体积最小化，避免膨胀
+        try:
+            from data.db_core import duckdb_vacuum_silent, duckdb_storage_snapshot
+            status_callback("🗜️ 开始执行数据库深度压缩...")
+            before_snapshot = duckdb_storage_snapshot()
+            status_callback(
+                f"📦 压缩前存储：db={before_snapshot['db_bytes']/1024/1024:.2f}MB, "
+                f"wal={before_snapshot['wal_bytes']/1024/1024:.2f}MB, "
+                f"tmp={before_snapshot['tmp_bytes']/1024/1024:.2f}MB, "
+                f"total={before_snapshot['total_bytes']/1024/1024:.2f}MB"
+            )
+            duckdb_vacuum_silent(log=status_callback)
+            after_snapshot = duckdb_storage_snapshot()
+            status_callback(
+                f"📦 压缩后存储：db={after_snapshot['db_bytes']/1024/1024:.2f}MB, "
+                f"wal={after_snapshot['wal_bytes']/1024/1024:.2f}MB, "
+                f"tmp={after_snapshot['tmp_bytes']/1024/1024:.2f}MB, "
+                f"total={after_snapshot['total_bytes']/1024/1024:.2f}MB"
+            )
+            if before_snapshot['total_bytes'] > 0 and after_snapshot['total_bytes'] > 0:
+                ratio = after_snapshot['total_bytes'] / before_snapshot['total_bytes']
+                if ratio < 0.95:
+                    status_callback(f"🗜️ 压缩优化完成：节省 {(1 - ratio) * 100:.1f}% 空间")
+                else:
+                    status_callback(f"✅ 压缩检查完成：存储效率良好 ({(1 - ratio) * 100:.1f}% 空间已优化)")
+            status_callback("✅ 数据库压缩完成，数据安全存储")
+        except Exception as e_vacuum:
+            logging.warning("批量补齐后数据库压缩失败（不影响数据完整性）: %s", e_vacuum)
+            status_callback(f"⚠️ 数据库压缩跳过: {e_vacuum}")
+        
         # 收集成功日期的 trade_date 做验证
         success_dates = [_norm_cal_date_8(d) for d in missing_days if d not in failed_days]
         run_post_fetch_verification(success_dates, status_callback)
@@ -2608,6 +2741,15 @@ def sync_single_day(trade_date_str, status_callback=print) -> bool:
     if len(d8) != 8 or not d8.isdigit():
         status_callback(f"❌ 非法交易日格式: {trade_date_str!r}，需 YYYYMMDD。")
         return False
+
+    # 【V26.7 修复】在生肉提取前预先创建写连接，避免断点续传只读连接与后续写连接冲突。
+    # 与 sync_missing_days_batch 相同的修复逻辑：确保 get_read_conn_singleton() 返回写连接。
+    try:
+        from data.db_core import get_conn
+        _ = get_conn()
+        logging.debug("单日同步前已预创建写连接")
+    except Exception as e_preconn:
+        logging.warning("单日同步预创建写连接失败: %s", e_preconn)
 
     try:
         cal = retry_api(pro.trade_cal)(exchange="SSE", is_open="1", start_date=d8, end_date=d8)

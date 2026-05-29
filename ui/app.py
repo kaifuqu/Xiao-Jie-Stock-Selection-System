@@ -11,6 +11,9 @@
 import sys
 import os
 
+# 【V26.8 智能模式】默认尝试写模式，如果数据库被占用则自动降级为只读
+os.environ.setdefault("XIAOJIE_READONLY_DB", "0")
+
 # 必须优先于 PYTHONPATH / 其它路径上的同名包，否则可能解析到错误的 `core`（无 scan_engine）。
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -89,6 +92,9 @@ import streamlit as st
 import altair as alt  
 import logging
 from datetime import datetime, timedelta, timezone
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from core.file_utils import atomic_json_update
 
@@ -1679,17 +1685,49 @@ def execute_scan(target_pool_list):
 
                 new_base_items = []
                 total = len(target_codes)
-                for i, c in enumerate(target_codes):
-                    my_bar.progress(0.1 + 0.9*(i / max(1, total)), text=f"📥 强行注入自选股特征 ({i+1}/{total})...")
-                    df = get_stock_data_qfq(c, limit=120)
-                    if not df.empty:
-                        df = precompute_indicators(df)
-                        hist = df.iloc[-1].to_dict()
-                        s_code = c.split('.')[0][:6]
-                        hist['name'] = normalize_stock_display_name(
-                            db_name_map.get(s_code, rt_map.get(s_code, {}).get("name") if isinstance(rt_map.get(s_code), dict) else s_code)
-                        )
-                        new_base_items.append({'code': c, 'p1_score': 85.0, 'df': df, 'hist': hist})
+                _duckdb_sem2 = threading.Semaphore(6)
+                _l2 = threading.Lock()
+                _done = 0
+
+                def _fetch_p0(c):
+                    """在独立线程中完成自选股的 K 线提取（信号量限制同时连接数）。"""
+                    with _duckdb_sem2:
+                        df = get_stock_data_qfq(c, limit=120)
+                    return c, df
+
+                def _on_p0(fut):
+                    nonlocal _done
+                    with _l2:
+                        _done += 1
+                        if _done % max(1, total // 20) == 0:
+                            my_bar.progress(0.1 + 0.85 * (_done / max(1, total)),
+                                          text=f"📥 注入自选股特征 ({_done}/{total})...")
+                    try:
+                        c, df = fut.result()
+                        if df is not None and not df.empty:
+                            df = precompute_indicators(df)
+                            s_code = c.split('.')[0][:6]
+                            hist = df.iloc[-1].to_dict()
+                            # 【V26.7 修复】合并实时数据中的 vol_ratio、turnover_rate_f 等关键字段
+                            rt_info = rt_map.get(s_code) if isinstance(rt_map, dict) else None
+                            if isinstance(rt_info, dict):
+                                for _rt_key in ('vol_ratio', 'turnover_rate_f', 'price', 'open', 'high', 'low', 'pct_chg', 'amount'):
+                                    if _rt_key in rt_info and rt_info[_rt_key] is not None:
+                                        hist[_rt_key] = rt_info[_rt_key]
+                            hist['name'] = normalize_stock_display_name(
+                                db_name_map.get(s_code, rt_info.get("name") if isinstance(rt_info, dict) and rt_info.get("name") else s_code)
+                            )
+                            with _l2:
+                                new_base_items.append({'code': c, 'p1_score': 85.0, 'df': df, 'hist': hist})
+                    except Exception as exc:
+                        logging.debug("P0 并行注入 %s 异常: %s", c, exc)
+
+                with ThreadPoolExecutor(max_workers=6) as _ex2:
+                    _fs = {_ex2.submit(_fetch_p0, c): c for c in target_codes}
+                    for _f in as_completed(_fs):
+                        _on_p0(_f)
+
+                my_bar.progress(0.95, text=f"📥 自选股注入完成 ({len(new_base_items)}/{total})...")
                 
                 os.makedirs('data', exist_ok=True)
                 # 【审计修复】维度6-P0 洗盘落盘改为 JSON
@@ -1780,20 +1818,53 @@ def execute_scan(target_pool_list):
                 mock_raw_data = []
                 empty_df_codes = []
                 total = len(target_codes)
-                for i, c in enumerate(target_codes):
-                    if i % max(1, total // 100) == 0: 
-                        my_bar.progress(0.05 + 0.95*(i / max(1, total)), text=f"📥 提取特征 ({i}/{total})...")
-                    df = get_stock_data_qfq(c, limit=120)
-                    if not df.empty: 
-                        hist = df.iloc[-1].to_dict()
-                        s_code = c.split('.')[0][:6]
-                        # 优先使用 DuckDB/实时获取的名称
-                        hist['name'] = normalize_stock_display_name(
-                            db_name_map.get(s_code, rt_map.get(s_code, {}).get("name") if isinstance(rt_map.get(s_code), dict) else s_code)
-                        )
-                        mock_raw_data.append({'code': c, 'df': df, 'hist': hist})
-                    else:
-                        empty_df_codes.append(c)
+
+                # 【V26.7 优化】第一阶段并行化：DuckDB 只读连接支持并发读，ThreadPoolExecutor 并行提取 K 线
+                # DuckDB 对同一文件的并发只读连接在 Windows 上受文件锁限制，并发数过大会排队等待反而更慢
+                # 使用 Semaphore(6) 将同时连接数限制在 6，兼顾并行提速与文件锁不堵塞
+                _workers = 6
+                _duckdb_sem = threading.Semaphore(6)
+                _lock = threading.Lock()
+                _completed = 0
+
+                def _fetch_one(c):
+                    """在独立线程中完成单只股票的 K 线提取（信号量限制同时连接数）。"""
+                    with _duckdb_sem:
+                        df = get_stock_data_qfq(c, limit=120)
+                    return c, df
+
+                def _on_done(fut):
+                    nonlocal _completed
+                    with _lock:
+                        _completed += 1
+                        if _completed % max(1, total // 20) == 0:
+                            my_bar.progress(0.05 + 0.85 * (_completed / max(1, total)),
+                                           text=f"📥 并行提取特征 ({_completed}/{total})...")
+                    try:
+                        c, df = fut.result()
+                        if df is not None and not df.empty:
+                            s_code = c.split('.')[0][:6]
+                            hist = df.iloc[-1].to_dict()
+                            # P1底仓池仅使用日线数据，不需要合并实时行情
+                            hist['name'] = normalize_stock_display_name(
+                                db_name_map.get(s_code, s_code)
+                            )
+                            with _lock:
+                                mock_raw_data.append({'code': c, 'df': df, 'hist': hist})
+                        else:
+                            with _lock:
+                                empty_df_codes.append(c)
+                    except Exception as exc:
+                        logging.debug("并行提取 %s 异常: %s", c, exc)
+                        with _lock:
+                            empty_df_codes.append(c)
+
+                with ThreadPoolExecutor(max_workers=_workers) as _ex:
+                    _futures = {_ex.submit(_fetch_one, c): c for c in target_codes}
+                    for _fut in as_completed(_futures):
+                        _on_done(_fut)
+
+                my_bar.progress(0.90, text=f"📥 特征提取完成 ({len(mock_raw_data)}/{total})，启动打分...")
 
                 if not mock_raw_data:
                     diag_reason = "数据库读取为空（原因待诊断）"
@@ -1864,10 +1935,10 @@ def execute_scan(target_pool_list):
                         pass
                     return
                 
-                my_bar.progress(1.0, text="🚀 打分引擎启动中...")
+                my_bar.progress(0.90, text="🚀 打分引擎启动中...")
                 base_items, rejected_items = build_p1_pool_and_cache(
                     mock_raw_data,
-                    progress_callback=lambda p: my_bar.progress(p, text=f"⚡ 淬炼中... ({int(p*100)}%)"),
+                    progress_callback=lambda p: my_bar.progress(0.90 + 0.10 * p, text=f"⚡ 淬炼中... ({int(p*100)}%)"),
                     regime_name=curr_regime
                 )
                 # 【策略实验室对齐】保存与本次洗盘相同的候选全集，供实验室回放；勿用「仅入池缓存」作输入，否则缩量上下文与统计样本与实盘不一致
@@ -2123,33 +2194,34 @@ if _mcs_ui > 0 or _sc_ui > 0:
     _p1_shrink_col_txt = f"收缩度{_mcs_ui:.2f}｜样本{_sc_ui}"
 else:
     _p1_shrink_col_txt = "--"
-    # 【V26.6 优化】在循环外批量构建 active_items 字典映射，O(1) 查找替代 O(n) 线性搜索
-    # 底仓有数百只时，原 `next((x for x in active_items if ...))` 线性搜索
-    # 对 P2/P3/P4/P5 四个池 × 每池 20 行 = 约 16000 次字符串匹配
-    _active_base_dict = {}
-    for _base_item in active_items:
-        _bc = str(_base_item.get('code', '')).split('.')[0][:6]
-        if _bc and _bc not in _active_base_dict:
-            _active_base_dict[_bc] = _base_item
 
-    # 【V26.6 优化】批量获取行业信息到 session_state 缓存，避免每行重复查询数据库
-    _industry_cache_key = "_industry_name_cache"
-    _industry_cache: dict = st.session_state.get(_industry_cache_key, {})
-    _active_codes_need_industry = [
-        str(x.get('code', '')).split('.')[0][:6]
-        for x in active_items
-        if x.get('code') and (str(x.get('code', '')).split('.')[0][:6] not in _industry_cache)
-    ]
-    if _active_codes_need_industry:
-        # 从 DuckDB 批量查询（利用 get_stock_industry 的内部 IN 查询）
-        for _cd in _active_codes_need_industry:
-            _ind = get_stock_industry(_cd)
-            if _ind and _ind != "--":
-                _industry_cache[_cd] = _ind
-        st.session_state[_industry_cache_key] = _industry_cache
+# 【V26.6 优化】在循环外批量构建 active_items 字典映射，O(1) 查找替代 O(n) 线性搜索
+# 底仓有数百只时，原 `next((x for x in active_items if ...))` 线性搜索
+# 对 P2/P3/P4/P5 四个池 × 每池 20 行 = 约 16000 次字符串匹配
+_active_base_dict = {}
+for _base_item in active_items:
+    _bc = str(_base_item.get('code', '')).split('.')[0][:6]
+    if _bc and _bc not in _active_base_dict:
+        _active_base_dict[_bc] = _base_item
 
-    if active_items:
-        for item in active_items:
+# 【V26.6 优化】批量获取行业信息到 session_state 缓存，避免每行重复查询数据库
+_industry_cache_key = "_industry_name_cache"
+_industry_cache: dict = st.session_state.get(_industry_cache_key, {})
+_active_codes_need_industry = [
+    str(x.get('code', '')).split('.')[0][:6]
+    for x in active_items
+    if x.get('code') and (str(x.get('code', '')).split('.')[0][:6] not in _industry_cache)
+]
+if _active_codes_need_industry:
+    # 从 DuckDB 批量查询（利用 get_stock_industry 的内部 IN 查询）
+    for _cd in _active_codes_need_industry:
+        _ind = get_stock_industry(_cd)
+        if _ind and _ind != "--":
+            _industry_cache[_cd] = _ind
+    st.session_state[_industry_cache_key] = _industry_cache
+
+if active_items:
+    for item in active_items:
             hist = item.get('hist', {})
             code = item.get('code', '')
             s_code = str(code).split('.')[0][:6]

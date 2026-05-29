@@ -17,7 +17,11 @@ import pandas as pd
 
 # Local modules
 from core.config_manager import get_p4_tail_screener_config, get_risk_control_config
-from core.strategies.p4_tail_screener import evaluate_p4_tail_screener
+from core.strategies.p4_tail_screener import (
+    evaluate_p4_tail_screener,
+    _safe_vwap_from_y,
+    _safe_vwap_from_rt_dimension_check,
+)
 from core.strategies.risk_control_engine import (
     DEFAULT_RISK_CONFIG,
     RiskControlConfig,
@@ -213,18 +217,26 @@ class P4Tail:
             close_live = float(rt.get("price", 0.0) or rt.get("close", 0.0) or 0.0)
             if close_live <= 0:
                 return None
-            vwap = rt.get("vwap")
-            if vwap is None or (isinstance(vwap, float) and pd.isna(vwap)):
-                vwap = rt.get("vwap_price")
-            if vwap is None or (isinstance(vwap, float) and pd.isna(vwap)):
-                # 兼容：用日线近似 VWAP，不强行造假；缺失时返回 None。
+            pre_close = float(rt.get("pre_close", 0.0) or 0.0)
+            if pre_close <= 0 and df is not None and len(df) > 0:
+                pre_close = float(df.iloc[-1].get("close", 0.0) or 0.0)
+            if pre_close <= 0:
+                pre_close = close_live
+            fallback = pre_close
+
+            vwap_raw = rt.get("vwap")
+            if vwap_raw is None or (isinstance(vwap_raw, float) and pd.isna(vwap_raw)):
+                vwap_raw = rt.get("vwap_price")
+            if vwap_raw is None or (isinstance(vwap_raw, float) and pd.isna(vwap_raw)):
                 if df is not None and len(df) > 0 and "amount" in df.columns and "vol" in df.columns:
                     last = df.iloc[-1]
                     amt = float(last.get("amount", 0.0) or 0.0)
                     vol = float(last.get("vol", 0.0) or 0.0)
-                    if amt > 0 and vol > 0:
-                        vwap = amt / max(vol, 1e-9)
-            vwap = float(vwap) if vwap is not None and not pd.isna(vwap) else 0.0
+                    vwap = _safe_vwap_from_y(amt, vol, fallback, fallback)
+                else:
+                    vwap = 0.0
+            else:
+                vwap = _safe_vwap_from_rt_dimension_check(vwap_raw, close_live, fallback)
             if vwap <= 0:
                 return None
             return (close_live - vwap) / vwap * 100.0
@@ -275,18 +287,14 @@ class P4Tail:
             if ma20_slope <= 0:
                 return False, f"均线防守否决: ma20_slope={ma20_slope:.4f}<=0（均线走平/向下，拒绝接盘）"
 
-            # 防线3：收盘价不能跌破 ma20（尾盘破位飞刀）
-            # 允许轻微回踩（> -0.5%），但超过此阈值视为有效破位
-            if close_live > 0 and ma20 > 0:
-                ma20_break_pct = (close_live - ma20) / ma20 * 100.0
-                if ma20_break_pct < -0.5:
-                    return False, f"均线防守否决: 尾盘破位 ma20 {ma20_break_pct:.2f}% < -0.5%（拒绝接左侧飞刀）"
-
-            # 防线4：收盘价不能跌破 ma5（更深层破位）
+            # 防线3：收盘价不能跌破 ma5（更深层破位）
+            # 注意：ma20 破位否决已由 p4_global_risk_veto 严格拦截（close_live < ma20 即否），
+            # 此处仅检查 ma5 深破（更严格），作为 engine 层额外防线，避免被 screener 放过的标的
+            # 在尾盘出现极端跳水。
             if close_live > 0 and ma5 > 0:
-                ma5_break_pct = (close_live - ma5) / ma5 * 100.0
-                if ma5_break_pct < -1.0:
-                    return False, f"均线防守否决: 尾盘深破 ma5 {ma5_break_pct:.2f}% < -1.0%（深层破位，拒绝接刀）"
+                ma5_bias_pct = (close_live - ma5) / ma5 * 100.0
+                if ma5_bias_pct < -1.0:
+                    return False, f"均线防守否决: 尾盘深破 ma5 {ma5_bias_pct:.2f}% < -1.0%（深层破位，拒绝接刀）"
 
             return True, ""
         except Exception as e:

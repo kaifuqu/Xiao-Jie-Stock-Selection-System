@@ -252,6 +252,7 @@ strategies:
   # ---------- P1 底仓：三档市场环境 profile（与 pool_manager._get_regime_thresholds 逻辑对应）----------
   p1:
     # 候选 SQL + 安检共用流通下限（万元）；注释掉则使用 constants.P1_SELECT_MIN_CIRC_MV_WAN（默认 100 亿 = 1000000）
+    # 用户要求：流通盘必须100亿以上
     select_min_circ_mv_wan: 1000000
     # 十一维后与 fund_memory_score（0~200→0~100）凸组合权重；0=纯十一维；缺省使用 constants.FUND_MEMORY_WEIGHT_P1
     fund_memory_weight_p1: 0.10

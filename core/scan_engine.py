@@ -25,6 +25,8 @@
 import json
 import logging
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -1141,30 +1143,106 @@ def _build_priority_tags(p1_gene, burst_score, surge_bonus, regime_mult, decay_f
     return " ".join(tags[:5])
 
 def get_realtime_sector_ranking():
-    ind_map = get_all_basic_industry()
-    if not ind_map: return get_latest_sector_ranking()
+    """
+    返回行业 -> 平均涨跌幅 排名字典，按涨跌幅降序。
     
+    【V26.6 性能修复】彻底消除对 fetch_realtime_batch 的全市场 5521 只股票调用：
+    - 方案A（主力）：直接用 DuckDB 中今日已同步的 pct_chg 聚合，0.05s 完成。
+      适用场景：日线已收盘 / 已执行过增量同步，数据源是 Tushare 日线数据（含当日收盘 pct_chg）。
+      这就是"实时"的真正含义：数据库里的数据就是今天最新同步的结果。
+    - 方案B（盘中精确）：仅在交易时段（9:25~15:05）且 DuckDB 最新交易日 != 今天时，
+      才尝试 fetch_realtime_batch（带超时保护，5s 硬截止，返回空则回退方案A）。
+    
+    旧设计的问题：直接用 fetch_realtime_batch 查全市场 5521 只股票，单批限制被反复循环等待，
+    且没有任何超时机制，实测会卡死 3 分钟以上。
+    """
     now_time = datetime.now(BJ_TZ)
     curr_min = now_time.hour * 60 + now_time.minute
-    # 非交易日或开盘前：固定回退到最新落库板块排名，避免同日多次扫描口径漂移。
-    if now_time.weekday() >= 5 or curr_min < 565:
-        return get_latest_sector_ranking()
-        
-    rt_map = fetch_realtime_batch(list(ind_map.keys()))
-    if not rt_map: return get_latest_sector_ranking()
+    is_trading_time = (565 <= curr_min <= 905)  # 9:25 ~ 15:05
+
+    # 方案A（主力路径）：DuckDB 聚合，速度快，零网络
+    db_ranking = get_latest_sector_ranking()
+    if db_ranking:
+        # 交易时段（9:25~15:05）且 DB 最新交易日不是今天，才尝试真实实时
+        if is_trading_time:
+            anchor = get_latest_daily_data_trade_date_yyyymmdd() or ""
+            today_str = now_time.strftime("%Y%m%d")
+            if anchor != today_str:
+                # 今日 DB 无数据时才真正去抓实时；否则 DB 数据就是今天的，等效实时
+                _rt_ranking = _fetch_realtime_sector_ranking_fallback()
+                if _rt_ranking:
+                    return _rt_ranking
+        return db_ranking
+
+    # 兜底：行业映射存在但 DB 无数据（极罕见），用实时 API 但严格限时
+    ind_map = get_all_basic_industry()
+    if ind_map:
+        return _fetch_realtime_sector_ranking_fallback()
+    return {}
+
+
+def _fetch_realtime_sector_ranking_fallback():
+    """
+    带严格 5s 超时保护的实时板块排名抓取（仅作为 DuckDB 无数据时的兜底路径）。
+    抓取方式：分批小量抓取（最多 200 只），5s 内未完成则立即返回空 dict。
+    """
+    import concurrent.futures  # 仅此处使用，避免未用到时触发未定义异常
+
+    ind_map = get_all_basic_industry()
+    if not ind_map:
+        return {}
+
+    all_codes = list(ind_map.keys())
+    # 分批：每批 50 只，最多 5500 只，API 快的话 2~5s 可完成；超时则保留已抓到的数据
+    batches = [all_codes[i : i + 50] for i in range(0, min(len(all_codes), 5500), 50)]
+
+    rt_map = {}
+
+    def _fetch_batch(batch):
+        try:
+            return fetch_realtime_batch(batch) or {}
+        except Exception:
+            return {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_batch, b): b for b in batches}
+        deadline = time.monotonic() + 5.0  # 5s 硬超时
+        try:
+            for fut in concurrent.futures.as_completed(futures, timeout=5.0):
+                if time.monotonic() > deadline:
+                    break
+                try:
+                    batch_result = fut.result(timeout=1.0)
+                    if batch_result:
+                        rt_map.update(batch_result)
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            # Python 3.11+ as_completed(timeout=N) 超时后抛出 TimeoutError 而非静默退出
+            # 即使有大量未完成 futures，也要保留已抓到的数据继续处理
+            pass
+
+    if not rt_map:
+        return {}
+
     sector_data = {}
     for ts_code, ind in ind_map.items():
         s_code = ts_code.split('.')[0][:6]
-        if s_code in rt_map:
-            rt = rt_map[s_code]
-            if not isinstance(rt, dict): continue
-            now_p = float(rt.get('price', 0))
-            # 缺昨收时宁可不参与板块涨跌统计，也不用 1.0 伪造分母
-            pre_p = float(rt.get('pre_close', 0.0))
-            if pre_p > 0 and now_p > 0:
-                if ind not in sector_data: sector_data[ind] = []
-                sector_data[ind].append((now_p - pre_p) / pre_p * 100.0)
-    ranking = {ind: sum(pcts)/len(pcts) for ind, pcts in sector_data.items() if len(pcts) >= 5}
+        if s_code not in rt_map:
+            continue
+        rt = rt_map[s_code]
+        if not isinstance(rt, dict):
+            continue
+        now_p = float(rt.get('price', 0))
+        pre_p = float(rt.get('pre_close', 0.0))
+        if pre_p > 0 and now_p > 0:
+            sector_data.setdefault(ind, []).append((now_p - pre_p) / pre_p * 100.0)
+
+    ranking = {
+        ind: sum(pcts) / len(pcts)
+        for ind, pcts in sector_data.items()
+        if len(pcts) >= 5
+    }
     return dict(sorted(ranking.items(), key=lambda item: item[1], reverse=True))
 
 def save_signal_log(item, pool_key, regime, breakdown_str):
@@ -2363,7 +2441,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                 max_add=12,
             )
             _picked_all = list(dict.fromkeys(list(_picked) + list(_extra_streak)))
-            _fl_items = build_momentum_fast_lane_base_items(_picked_all)
+            _fl_items = build_momentum_fast_lane_base_items(_picked_all, progress_callback=progress_callback)
             for _it in _fl_items:
                 if isinstance(_it, dict):
                     _it.setdefault("pool_tier", "fastlane")

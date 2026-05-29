@@ -108,10 +108,10 @@ def _safe_vwap_from_rt(rt, ref_price, fallback_price):
     # 假设 volume 单位为"股"（最常见），计算 tentative VWAP
     tentative = amt / max(vol, 1e-9)
 
-    # 量纲合理性校验：偏离 ref_price 超过 20% → 尝试 vol*100（把手转股）
+    # 量纲合理性校验：偏离 ref_price 超过 20% → 尝试 vol/100（把手转股：1手=100股）
     if ref_price > 0 and abs(tentative - ref_price) / ref_price > 0.20:
-        vol_as_hand = vol * 100.0
-        corrected = amt / max(vol_as_hand, 1e-9)
+        vol_as_shares = vol / 100.0
+        corrected = amt / max(vol_as_shares, 1e-9)
         if ref_price > 0 and abs(corrected - ref_price) / ref_price <= 0.20:
             return corrected
         # 修正后仍不合理，降级到 fallback
@@ -661,11 +661,16 @@ class P3Intraday:
                 rt_risk_lunch["curr_min"] = now_time.hour * 60 + now_time.minute
                 curr_min = _curr_min_lunch_cleaned(rt_risk_lunch)
 
-                if s_code and curr_min >= 630:
+                if s_code and curr_min > 0:
                     cache = self.db_cache.get(s_code)
                     vol_rt = _safe_float(rt.get("volume", 0.0))
                     if cache and vol_rt > 0:
-                        if curr_min < 780:
+                        # 午休清洗后的已交易分钟数映射:
+                        #   10:30(clock 630) -> 120 分钟（上午末段）
+                        #   13:00(clock 720) -> 120 分钟（下午开盘）
+                        #   14:30(clock 870) -> 210 分钟（午盘主力时段）
+                        # 10:30-13:00 段用 slice_1030_mean，14:30+ 段用 slice_1300_mean
+                        if curr_min < 210:
                             mean = cache.get("1030_mean", 0.0)
                             std = cache.get("1030_std", 0.0)
                         else:

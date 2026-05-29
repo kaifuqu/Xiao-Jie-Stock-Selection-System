@@ -123,6 +123,13 @@ class P4TailScreenerConfig:
     s7_vol_ratio_min: float = 1.2
     s7_turnover_f_fly_gt: float = 18.0
 
+    # ---------- P4-05 质量趋势底仓（策略五） ----------
+    # 复用到 _strategy_value_div_bottom；注意编号为 s5_* 而非 s5_（与 P4-05 实际编号对应）
+    s5_pe_max: float = 20.0
+    s5_turnover_f_max_lt: float = 4.0
+    s5_pct_low: float = -1.0
+    s5_pct_high: float = 1.5
+
     # ---------- P4-06 动能突破共振 ----------
     s6_momentum_prev_pct_low: float = 3.0
     s6_momentum_prev_pct_high: float = 6.0

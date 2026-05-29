@@ -19,6 +19,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from dataclasses import MISSING, fields, is_dataclass, replace
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
@@ -341,6 +342,9 @@ def invalidate_config_cache() -> None:
     """实验室写入 YAML 或需强制刷新时调用。"""
     with _LOCK:
         _RAW_CACHE.clear()
+        global _COMBO_MULTIPLIER_CACHE, _BEHAVIOR_PENALTY_CACHE
+        _COMBO_MULTIPLIER_CACHE = None
+        _BEHAVIOR_PENALTY_CACHE = None
 
 
 def _lab_root() -> dict:
@@ -591,8 +595,25 @@ def get_p1_fund_memory_weight() -> float:
     return float(max(0.0, min(0.30, w)))
 
 
+_COMBO_MULTIPLIER_TTL_SEC = 30.0
+_COMBO_MULTIPLIER_CACHE: Optional[Dict[str, float]] = None
+_COMBO_MULTIPLIER_CACHE_TS: float = 0.0
+
+
 def get_p1_combo_multiplier_config() -> Dict[str, float]:
-    """读取 P1 组合特征乘数参数，便于实盘从 config.yaml 微调。"""
+    """读取 P1 组合特征乘数参数，便于实盘从 config.yaml 微调。
+    
+    【V26.6 性能优化】30s TTL 缓存：1435 只股票处理时，该函数被调用 1435 次，
+    配置内容在同一会话内完全不变，缓存可消除 ~99.9% 的 deep_merge + 35 个 float 转换开销。
+    """
+    global _COMBO_MULTIPLIER_CACHE, _COMBO_MULTIPLIER_CACHE_TS
+    now = time.monotonic()
+    if (
+        _COMBO_MULTIPLIER_CACHE is not None
+        and (now - _COMBO_MULTIPLIER_CACHE_TS) < _COMBO_MULTIPLIER_TTL_SEC
+    ):
+        return _COMBO_MULTIPLIER_CACHE
+
     s = get_strategies_dict()
     p1 = s.get("p1") if isinstance(s.get("p1"), dict) else {}
     lab = _lab_for("p1")
@@ -607,7 +628,7 @@ def get_p1_combo_multiplier_config() -> Dict[str, float]:
             v = default
         return float(v)
 
-    return {
+    result = {
         "enabled": bool(merged.get("enabled", True)),
         "min": _f("min", 0.90),
         "max": _f("max", 1.20),
@@ -634,23 +655,43 @@ def get_p1_combo_multiplier_config() -> Dict[str, float]:
         "industry_bonus_min": _f("industry_bonus_min", 8.0),
         "rank_bonus_min": _f("rank_bonus_min", 2.0),
     }
+    _COMBO_MULTIPLIER_CACHE = result
+    _COMBO_MULTIPLIER_CACHE_TS = now
+    return result
 
+
+_BEHAVIOR_PENALTY_CACHE: Optional[Dict[str, Any]] = None
+_BEHAVIOR_PENALTY_CACHE_TS: float = 0.0
 
 def get_p1_stock_behavior_penalty_config() -> Dict[str, Any]:
-    """读取 P1 股性惩罚参数（长上影 / 冲高回落黑名单）。"""
+    """读取 P1 股性惩罚参数（长上影 / 冲高回落黑名单）。
+    
+    【V26.6 性能优化】30s TTL 缓存：1435 只股票处理时该函数被调用 1435 次，
+    配置内容同一会话内不变，缓存消除重复的 deep_merge + 字典构建开销。
+    """
+    global _BEHAVIOR_PENALTY_CACHE, _BEHAVIOR_PENALTY_CACHE_TS
+    now = time.monotonic()
+    if (
+        _BEHAVIOR_PENALTY_CACHE is not None
+        and (now - _BEHAVIOR_PENALTY_CACHE_TS) < _COMBO_MULTIPLIER_TTL_SEC
+    ):
+        return _BEHAVIOR_PENALTY_CACHE
     s = get_strategies_dict()
     p1 = s.get("p1") if isinstance(s.get("p1"), dict) else {}
     lab = _lab_for("p1")
     base = p1.get("stock_behavior_penalty") if isinstance(p1.get("stock_behavior_penalty"), dict) else {}
     override = lab.get("stock_behavior_penalty") if isinstance(lab.get("stock_behavior_penalty"), dict) else {}
     merged = deep_merge(base, override)
-    return {
+    result = {
         "enabled": bool(merged.get("enabled", True)),
         "lookback_days": int(float(merged.get("lookback_days", 20))),
         "long_upper_shadow_hits_min": int(float(merged.get("long_upper_shadow_hits_min", 3))),
         "intraday_dump_hits_min": int(float(merged.get("intraday_dump_hits_min", 3))),
         "score_penalty": float(merged.get("score_penalty", 8.0)),
     }
+    _BEHAVIOR_PENALTY_CACHE = result
+    _BEHAVIOR_PENALTY_CACHE_TS = now
+    return result
 
 
 def get_p1_thresholds_for_profile(regime_name: Optional[str], profile_key: str) -> dict:

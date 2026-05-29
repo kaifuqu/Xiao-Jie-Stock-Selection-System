@@ -492,6 +492,60 @@ def init_tushare_pro():
 _conn_lock = threading.RLock()
 _write_con = None
 _read_con = None
+# 【V26.7 新增】追踪所有创建的只读连接，以便在需要时关闭它们
+# 解决 "different configuration" 错误：确保在创建写连接前关闭所有只读连接
+_readonly_conns = []
+
+# 【V26.8 新增】只读模式标志
+# 当设置为 True 时，本进程只能创建只读连接，禁止创建写连接
+# 用于 Streamlit UI 等只查询不写入的场景，与 sniper daemon 的写操作共存
+_READONLY_MODE = os.environ.get("XIAOJIE_READONLY_DB", "0") == "1"
+
+
+def set_readonly_mode(enabled: bool = True):
+    """设置只读模式。启用后 get_conn() 将拒绝创建写连接，只能创建只读连接。"""
+    global _READONLY_MODE
+    _READONLY_MODE = bool(enabled)
+    if _READONLY_MODE:
+        logging.info("DuckDB 只读模式已启用（XIAOJIE_READONLY_DB=1）")
+    else:
+        logging.info("DuckDB 只读模式已禁用")
+
+
+def is_readonly_mode() -> bool:
+    """返回当前是否为只读模式。"""
+    return _READONLY_MODE
+
+
+def _register_readonly_conn(con):
+    """注册只读连接以便后续追踪。"""
+    global _readonly_conns
+    if con not in _readonly_conns:
+        _readonly_conns.append(con)
+
+
+def _close_all_readonly_conns():
+    """
+    关闭所有追踪的只读连接。
+
+    用于解决 "different configuration" 错误：
+    当需要创建写连接时，先调用此函数关闭所有只读连接。
+    """
+    global _readonly_conns, _read_con
+    # 关闭所有追踪的只读连接
+    for con in _readonly_conns:
+        try:
+            con.close()
+        except Exception:
+            pass
+    _readonly_conns = []
+    # 关闭全局只读连接
+    if _read_con is not None:
+        try:
+            _read_con.close()
+        except Exception:
+            pass
+        _read_con = None
 
 
 def _duckdb_connect_write():
@@ -501,7 +555,202 @@ def _duckdb_connect_write():
 
 def _duckdb_connect_readonly():
     """统一只读连接创建入口，便于后续收口连接策略。"""
-    return duckdb.connect(db_path, read_only=True)
+    con = duckdb.connect(db_path, read_only=True)
+    _register_readonly_conn(con)
+    return con
+
+
+# 线程本地只读连接池：每个调用线程持有一个独立 DuckDB 只读连接
+# 解决 ThreadPoolExecutor 并行调用 get_stock_data_qfq 时共享单例连接导致 result closed 崩溃
+_thread_local = threading.local()
+
+
+def close_thread_local_conn():
+    """
+    清理当前线程的本地只读连接。
+
+    用于解决以下场景：
+    1. Phase 1 批量下载时断点续传调用 get_read_conn_singleton() 创建了只读连接
+    2. Phase 2 全量重铸需要 get_conn() 创建写连接
+    3. DuckDB 在 Windows 上同一进程内不能同时存在 read_only=True 和 read_only=False 连接
+
+    在 Phase 1 结束后、Phase 2 开始前调用此函数，清理线程本地只读连接，
+    避免与后续写连接产生 "different configuration" 错误。
+    """
+    if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
+        try:
+            _thread_local.conn.close()
+        except Exception:
+            pass
+        _thread_local.conn = None
+    # 重置线程本地状态
+    if hasattr(_thread_local, '_query_count'):
+        _thread_local._query_count = 0
+
+
+def close_temp_read_connections():
+    """
+    关闭通过 get_read_conn_singleton() 创建的临时只读连接。
+
+    当进程内存在只读连接时，后续调用 get_conn() 创建写连接会触发
+    DuckDB "Can't open a connection to same database file with a different configuration" 错误。
+
+    此函数通过关闭所有可能的连接源来清除残留的只读连接：
+    1. 清理线程本地连接
+    2. 关闭全局只读连接（如果存在）
+
+    注意：此函数不会关闭写连接（_write_con），因为那是业务连接。
+    """
+    import gc
+    # 先清理线程本地连接
+    close_thread_local_conn()
+    # 强制垃圾回收，关闭不可达的只读连接对象
+    gc.collect()
+    # 最后清理全局只读连接
+    global _read_con
+    with _conn_lock:
+        if _read_con is not None:
+            try:
+                _read_con.close()
+            except Exception:
+                pass
+            _read_con = None
+
+def _get_thread_local_read_conn():
+    """
+    返回当前线程独立的 DuckDB 连接（线程内复用）。
+
+    【V26.7 最终修复版】
+    核心策略：
+    1. 若 _write_con 已建立 → 直接复用写连接（写连接可读，无配置冲突）
+    2. 若 _write_con 未建立 → 创建非只读连接（可读可写，不会有配置冲突）
+    3. 绝对不创建 read_only=True 连接（会与后续 get_conn() 的写连接冲突）
+    
+    【V26.8 修复】在创建新连接前，必须清理所有只读连接，
+    避免 "Can't open a connection to same database file with a different configuration" 错误。
+    """
+    import time as _time_module
+
+    if not hasattr(_thread_local, 'conn') or _thread_local.conn is None:
+        _thread_local.conn = None
+        _thread_local._query_count = 0
+
+        # 【V26.7 核心策略】检查全局写连接
+        if _write_con is not None:
+            _thread_local.conn = _write_con
+            _thread_local._source_table = "daily_data"
+            return _thread_local.conn
+
+        # 【V26.8 关键修复】在创建新连接前，清理所有只读连接
+        # 避免 "different configuration" 错误：同一进程内不能同时存在只读和读写连接
+        _close_all_readonly_conns()
+        if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
+            try:
+                _thread_local.conn.close()
+            except Exception:
+                pass
+            _thread_local.conn = None
+
+        # 【V26.8 关键修复】不创建 read_only=True 连接！
+        # 只创建普通连接（可读可写），避免与后续 get_conn() 的写连接冲突
+        try:
+            _thread_local.conn = duckdb.connect(db_path)
+            _thread_local._query_count = 0
+            try:
+                _thread_local._source_table = (
+                    "vw_daily_data_compat"
+                    if _table_exists_via_conn(_thread_local.conn, "vw_daily_data_compat")
+                    else "daily_data"
+                )
+            except Exception:
+                _thread_local._source_table = "daily_data"
+        except Exception as _conn_err:
+            logging.warning("线程本地连接创建失败: %s", _conn_err)
+            # 降级：尝试使用全局写连接（如果可用）
+            if _write_con is not None:
+                _thread_local.conn = _write_con
+                _thread_local._source_table = "daily_data"
+            else:
+                return None
+
+    _thread_local._query_count += 1
+    # 每 500 次查询强制重建连接
+    if _thread_local._query_count > 500:
+        _thread_local._query_count = 0
+        # 关闭旧连接
+        try:
+            if _thread_local.conn is not None and _thread_local.conn != _write_con:
+                _thread_local.conn.close()
+        except Exception:
+            pass
+        _thread_local.conn = None
+        # 【V26.8 关键修复】重连前清理所有只读连接
+        _close_all_readonly_conns()
+        # 重新获取
+        if _write_con is not None:
+            _thread_local.conn = _write_con
+        else:
+            try:
+                _thread_local.conn = duckdb.connect(db_path)
+            except Exception:
+                return None
+        try:
+            _thread_local._source_table = (
+                "vw_daily_data_compat"
+                if _table_exists_via_conn(_thread_local.conn, "vw_daily_data_compat")
+                else "daily_data"
+            )
+        except Exception:
+            _thread_local._source_table = "daily_data"
+
+    return _thread_local.conn
+
+
+def _table_exists_via_conn(conn, table_name):
+    """用已有连接判断表是否存在（不走全局锁）。"""
+    try:
+        df = conn.execute("SHOW TABLES").fetchdf()
+        if df is not None and not df.empty and 'name' in df.columns:
+            return table_name in df['name'].astype(str).values
+        return False
+    except Exception:
+        return False
+
+def _safe_thread_local_query(ts_code, limit, offset):
+    """用线程本地连接执行查询，失败时自动重连一次。"""
+    conn = _get_thread_local_read_conn()
+    if conn is None:
+        return pd.DataFrame()
+    # 使用线程内缓存的表名（避免每次查询都调 table_exists 争抢全局锁）
+    source_table = getattr(_thread_local, '_source_table', None) or 'daily_data'
+    try:
+        return conn.execute(
+            f"SELECT * FROM {source_table} WHERE ts_code = ? ORDER BY trade_date DESC LIMIT ? OFFSET ?",
+            [str(ts_code), limit, offset]
+        ).fetchdf()
+    except Exception as e:
+        err_msg = str(e).lower()
+        # 【V26.7 检测配置冲突错误，触发重连修复】
+        if any(k in err_msg for k in ("result closed", "wal", "writefile", "replay", "different configuration")):
+            # 关闭旧连接并重建
+            try:
+                if _thread_local.conn is not None and _thread_local.conn != _write_con:
+                    _thread_local.conn.close()
+            except Exception:
+                pass
+            _thread_local.conn = None
+            # 重新获取连接
+            conn = _get_thread_local_read_conn()
+            if conn is not None:
+                try:
+                    return conn.execute(
+                        f"SELECT * FROM {source_table} WHERE ts_code = ? ORDER BY trade_date DESC LIMIT ? OFFSET ?",
+                        [str(ts_code), limit, offset]
+                    ).fetchdf()
+                except Exception:
+                    return pd.DataFrame()
+            return pd.DataFrame()
+        raise
 
 
 def _duckdb_is_lock_error(exc: BaseException) -> bool:
@@ -579,7 +828,15 @@ def get_conn():
     - 同一进程内始终只保留一个写单例；若此前仅有只读连接，则会先关闭只读再建写。
     - 长事务结束后，优先显式 commit/rollback；需要物理整理时再调用短连接的 ``get_write_conn()``。
     """
-    global _write_con, _read_con
+    global _write_con, _read_con, _READONLY_MODE
+    
+    # 【V26.8 只读模式检查】
+    if _READONLY_MODE:
+        raise RuntimeError(
+            "DuckDB 只读模式已启用，禁止创建写连接。"
+            "如需写入操作，请在启动时设置 XIAOJIE_READONLY_DB=0 或调用 set_readonly_mode(False)"
+        )
+    
     with _conn_lock:
         if _write_con is None:
             if _read_con is not None:
@@ -592,8 +849,53 @@ def get_conn():
             try:
                 _write_con = _duckdb_connect_write()
             except Exception as e:
-                if _duckdb_recover_from_corrupt_wal_connect_error(e):
-                    _write_con = _duckdb_connect_write()
+                err_msg = str(e).lower()
+                # 【V26.8 智能降级】检测是否被其他进程锁定
+                _is_locked = (
+                    "another program" in err_msg or
+                    "process cannot access" in err_msg or
+                    "used by another process" in err_msg or
+                    "拒绝访问" in str(e) or
+                    ("canada" in err_msg and "open" in err_msg)
+                )
+                if _is_locked:
+                    # 数据库被其他进程锁定，自动降级为只读模式
+                    _READONLY_MODE = True
+                    logging.warning(
+                        "DuckDB 写连接失败（另一进程占库），自动降级为只读模式。写入操作将不可用。"
+                    )
+                    raise RuntimeError(
+                        "DuckDB 写连接失败（另一进程占库），自动降级为只读模式。"
+                    )
+                # 【V26.8 优化】处理 "different configuration" 错误
+                # 这种错误表示进程内已存在只读连接，创建写连接会冲突
+                # 尝试关闭所有可能的只读连接，再重试
+                if "different configuration" in err_msg and "same database file" in err_msg:
+                    # 关闭所有只读连接（这是正常的重试场景，不算错误）
+                    _close_all_readonly_conns()
+                    # 关闭线程本地连接
+                    if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
+                        try:
+                            _thread_local.conn.close()
+                        except Exception:
+                            pass
+                        _thread_local.conn = None
+                    # 强制垃圾回收，关闭不可达的对象
+                    import gc
+                    gc.collect()
+                    try:
+                        _write_con = _duckdb_connect_write()
+                        # 重试成功后记录 debug 级别日志，避免警告干扰
+                        logging.debug("DuckDB 写连接在关闭只读连接后重试成功")
+                    except Exception as e2:
+                        logging.error("DuckDB 写连接重试仍失败: %s", e2)
+                        raise
+                elif _duckdb_recover_from_corrupt_wal_connect_error(e):
+                    try:
+                        _write_con = _duckdb_connect_write()
+                    except Exception as e2:
+                        logging.error("DuckDB WAL 恢复后重连仍失败: %s", e2)
+                        raise
                 else:
                     raise
             # WAL 残留阈值：避免大量写入后 `.wal` 长时间不被合并
@@ -614,6 +916,12 @@ def get_read_conn_singleton(*, max_wait_sec: float = 0.0):
     max_wait_sec:
         0  — 默认约 18s 内退避重试（适合 UI 高频查询）；
         >0 — 最长等待秒数，用于守护进程在 Streamlit 占锁时仍能读到代码列表。
+
+    【V26.7 关键修复】禁止缓存只读连接到 _read_con 全局变量。
+    若 _read_con 被缓存后，同一进程的另一个路径调用 get_conn() 创建了写连接，
+    DuckDB 在 Windows 上会报 "Can't open a connection to same database file with a different configuration"，
+    因为同一进程内同时存在 read_only=True 和 read_only=False 连接。
+    修复：只读连接每次按需创建，用完不缓存；写连接仍在 _write_con 全局单例（可读可写）。
     """
     global _read_con, _write_con
     budget = float(max_wait_sec) if float(max_wait_sec) > 0 else 18.0
@@ -624,25 +932,40 @@ def get_read_conn_singleton(*, max_wait_sec: float = 0.0):
         with _conn_lock:
             if _write_con is not None:
                 return _write_con
-            if _read_con is not None:
-                return _read_con
+            # 不再从 _read_con 缓存读取，避免与后续 get_conn() 的写连接产生配置冲突
+            # if _read_con is not None:
+            #     return _read_con
             if not os.path.exists(db_path):
                 return get_conn()
             try:
-                _read_con = _duckdb_connect_readonly()
-                logging.info(f"DuckDB 只读连接已创建: {db_path}")
-                return _read_con
+                # 【V26.8 关键修复】先关闭所有只读连接，避免配置冲突
+                _close_all_readonly_conns()
+                # 尝试创建只读连接
+                _fresh_read_con = _duckdb_connect_readonly()
+                logging.debug(f"DuckDB 只读连接已创建: {db_path}")
+                return _fresh_read_con
             except Exception as e:
                 last_err = e
+                err_msg = str(e).lower()
+                # 【V26.8 关键修复】"different configuration" 错误表示本进程内已有读写连接
+                # 此时应该复用写连接而不是继续创建只读连接
+                if "different configuration" in err_msg and "same database file" in err_msg:
+                    if _write_con is not None:
+                        logging.debug("检测到 different configuration 错误，复用已有写连接")
+                        return _write_con
                 if _duckdb_recover_from_corrupt_wal_connect_error(e):
                     try:
-                        _read_con = _duckdb_connect_readonly()
+                        _close_all_readonly_conns()
+                        _fresh_read_con = _duckdb_connect_readonly()
                         logging.info(f"DuckDB 只读连接已恢复: {db_path}")
-                        return _read_con
+                        return _fresh_read_con
                     except Exception as e2:
                         last_err = e2
                 if not _duckdb_transient_connect_error(last_err):
                     logging.error("DuckDB 只读连接失败（非占锁类，不重试）: %s", last_err)
+                    # 【V26.8 修复】fallback：尝试使用写连接
+                    if _write_con is not None:
+                        return _write_con
                     return None
         attempt += 1
         if attempt == 1 or attempt % 8 == 0:
@@ -704,7 +1027,12 @@ def get_read_conn(read_only: bool = True):
                     with get_write_conn() as wc:
                         yield wc
                     return
-                con = _duckdb_connect_readonly()
+            # get_read_conn_singleton 返回 None 时走此 fallback
+            # 【V26.7 修复】fallback 也必须检查写连接，避免配置冲突
+            if _write_con is not None:
+                yield _write_con
+                return
+            con = _duckdb_connect_readonly()
             yield con
             return
         if not os.path.exists(db_path):
@@ -1079,9 +1407,9 @@ def get_existing_trade_dates():
 
 def get_all_stock_codes():
     """返回日线库中出现过的全部 ts_code。"""
-    con = get_read_conn_singleton(max_wait_sec=120.0)
+    con = get_read_conn_singleton(max_wait_sec=15.0)
     if con is None:
-        logging.error("get_all_stock_codes: 无法建立 DuckDB 只读连接（占锁超时）")
+        logging.error("get_all_stock_codes: 无法建立 DuckDB 只读连接（占锁超时或WAL损坏），返回空列表")
         return []
     try:
         codes = con.execute("SELECT DISTINCT ts_code FROM daily_data").fetchall()
@@ -1226,9 +1554,9 @@ def get_p1_candidate_codes(min_mv_wan=None):
         min_mv_wan = max(0, int(min_mv_wan))
     except (TypeError, ValueError):
         min_mv_wan = 600_000
-    con = get_read_conn_singleton(max_wait_sec=120.0)
+    con = get_read_conn_singleton(max_wait_sec=15.0)
     if con is None:
-        logging.error("get_p1_candidate_codes: 无法建立 DuckDB 只读连接（占锁超时）")
+        logging.error("get_p1_candidate_codes: 无法建立 DuckDB 只读连接（占锁超时或WAL损坏），返回空候选")
         return []
     try:
         if table_exists("vw_daily_data_compat"):
@@ -1279,26 +1607,26 @@ def get_p1_candidate_codes(min_mv_wan=None):
 
 
 # ==================== QFQ 前复权与指标绑定 ====================
-def get_stock_data_qfq(ts_code, limit=400, offset=0):
+def get_stock_data_qfq(ts_code, limit=400, offset=0, use_thread_local=True):
     """
     取出历史数据 -> 动态执行前复权 -> 绑定计算全量技术指标 -> 返回。
     行顺序：按 trade_date 升序；列顺序：以库表 SELECT * 顺序为基底，后续仅追加指标列（不主动重排原列）。
+
+    【V26.7 连接安全修复】默认使用 use_thread_local=True：
+    - 线程本地连接会自动检测写连接并复用，避免 read_only + 读写 连接配置冲突
+    - 解决 "Can't open a connection to same database file with a different configuration" 错误
+    - 避免 Windows 环境下 WAL replay 导致的连接问题
     """
     try:
-        con = get_read_conn_singleton()
+        # 【V26.7 统一使用线程本地连接】避免 read_only + 读写 连接配置冲突
+        con = _get_thread_local_read_conn()
         if con is None:
-            logging.error(f"🚨 [连接阻断] 无法获取 DuckDB 只读连接，跳过 {ts_code} K线读取")
+            logging.error(f"🚨 [连接阻断] 无法获取线程本地 DuckDB 连接，跳过 {ts_code} K线读取")
             return pd.DataFrame()
 
         limit = max(1, min(int(limit), 5000))
         offset = max(0, int(offset))
-        source_table = "vw_daily_data_compat" if table_exists("vw_daily_data_compat") else "daily_data"
-        query = f"""
-            SELECT * FROM {source_table}
-            WHERE ts_code = ?
-            ORDER BY trade_date DESC LIMIT ? OFFSET ?
-        """
-        df = con.execute(query, [str(ts_code), limit, offset]).fetchdf()
+        df = _safe_thread_local_query(str(ts_code), limit, offset)
 
         if not df.empty and 'trade_date' in df.columns:
             # 关键防爆：DuckDB 某些缺失兜底字段会以字符串落库，先做统一数值安检

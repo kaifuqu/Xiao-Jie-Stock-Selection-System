@@ -1064,7 +1064,9 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         ind = industry_map.get(ts_code, '未知')
         ind_rank = int(sector_rank_map.get(ind, 999))
 
-        vr = _safe_float(rt.get('vol_ratio', 1.0))
+        # 【V26.7 修复】vol_ratio=0 表示盘中数据未计算或无效，使用 1.0 作为默认值
+        vr_raw = rt.get('vol_ratio')
+        vr = 1.0 if (vr_raw is None or vr_raw == 0.0) else _safe_float(vr_raw, 1.0)
         _open_today_for_attack = _safe_float(rt.get("open"), 0.0)
         if _open_today_for_attack <= 0 and not df.empty and "open" in df.columns:
             _open_today_for_attack = _safe_float(df["open"].iloc[-1], 0.0)
@@ -1166,7 +1168,9 @@ def _process_single_stock_for_p1(item, industry_pe_stats, global_stats, industry
         curr = df.iloc[-1]
         now_price = _safe_float(rt.get('price', curr.get('close', 0.0)))
 
-        tail_vol_ratio = _safe_float(rt.get('tail_vol_ratio', 0.0))
+        # 【V26.7 修复】tail_vol_ratio=0 表示盘中数据未计算，使用 1.0 作为默认值
+        tail_vol_ratio_raw = rt.get('tail_vol_ratio')
+        tail_vol_ratio = 1.0 if (tail_vol_ratio_raw is None or tail_vol_ratio_raw == 0.0) else _safe_float(tail_vol_ratio_raw, 1.0)
         bias20 = _safe_float(curr.get('bias_20', (now_price - curr.get('ma20', now_price)) / max(curr.get('ma20', 1), 1) * 100.0))
         _ma60_for_bias = _safe_float(curr.get("ma60", 0.0))
         if _ma60_for_bias > 0:
@@ -2061,7 +2065,7 @@ def select_momentum_fast_lane_ts_codes(
     return out
 
 
-def build_momentum_fast_lane_base_items(ts_codes: List[str]) -> List[Dict[str, Any]]:
+def build_momentum_fast_lane_base_items(ts_codes: List[str], progress_callback=None) -> List[Dict[str, Any]]:
     """
     对直通车代码逐只拉 QFQ 日线并 precompute_indicators，构造与底仓项同形的 dict。
     标记 _momentum_fast_lane 供 scan_engine 在 P3/P4 上放宽黄金门禁（仍走物理胸甲战法打分）。

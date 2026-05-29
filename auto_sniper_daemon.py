@@ -896,9 +896,16 @@ def _probe_duckdb_for_open_heartbeat() -> Tuple[bool, str]:
     异常时返回 (False, 简短原因)，不向外抛，避免干扰守护进程主循环。
     """
     try:
-        from data.db_core import get_read_conn_singleton
-
-        con = get_read_conn_singleton()
+        # 【V26.8 优化】优先使用写连接（如果已初始化），避免创建只读连接后与后续写操作冲突
+        from data.db_core import get_conn, _write_con
+        
+        if _write_con is not None:
+            # 写连接已初始化，直接使用
+            _write_con.execute("SELECT 1").fetchone()
+            return True, "正常（写连接）"
+        
+        # 写连接未初始化，尝试获取
+        con = get_conn()
         con.execute("SELECT 1").fetchone()
         return True, "正常"
     except Exception as e:
@@ -2476,6 +2483,13 @@ def main() -> None:
         logger.warning("data_fetcher 预热失败: %s", e)
 
     _apply_daemon_resource_profile()
+    # 【V26.8 优化】立即初始化写连接，避免后续 get_read_conn_singleton() 创建只读连接后与写操作冲突
+    try:
+        from data.db_core import get_conn
+        _write_conn = get_conn()
+        logger.info("DuckDB 写连接已初始化（sniper daemon 独占写模式）")
+    except Exception as e:
+        logger.warning("写连接初始化失败（非致命，将自动重试）: %s", e)
     _init_async_scan_queue_consumer()
     register_schedules()
     _write_daemon_public_meta()

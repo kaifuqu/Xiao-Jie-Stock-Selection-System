@@ -405,9 +405,9 @@ def _safe_vwap_from_rt(
 
     # 量纲合理性校验：VWAP 偏离 ref_price 超过 20%，说明量纲可能错位
     if ref_price > 0 and abs(tentative - ref_price) / ref_price > 0.20:
-        # 尝试修正：若 volume 实际上是"手"（1手=100股），则需要 /100
-        vol_as_hand = vol * 100.0
-        corrected = amt / max(vol_as_hand, 1e-9)
+        # 修正：若 volume 实际上是"手"（1手=100股），则需除以100把手转股
+        vol_as_shares = vol / 100.0
+        corrected = amt / max(vol_as_shares, 1e-9)
         if ref_price > 0 and abs(corrected - ref_price) / ref_price <= 0.20:
             # 修正后量纲合理，使用修正值
             return corrected
@@ -576,8 +576,14 @@ def _fund_flow_signal(rt: Dict[str, Any], y: pd.Series, now_px: float) -> Tuple[
 
 def _intraday_elapsed_minutes(rt: Dict[str, Any]) -> int:
     """
-    已交易分钟数(与 scan_engine 主会话 9:30~15:00 对齐，中间非连续简化为 240 分钟满额日).
-    流式场景可在 rt['elapsed_mins'] 注入，避免多股重复调用系统时钟.
+    已交易分钟数（剔除午休时间，与 scan_engine 主会话 9:30~15:00 对齐）。
+
+    流式场景可在 rt['elapsed_mins'] 注入，避免多股重复调用系统时钟。
+    非交易时段（开盘前/收市后）回退到 240 分钟满额日估算。
+
+    A 股午休陷阱：
+    - 若 curr_min 直接减 570，13:01（cm=721）会算出 151 分钟，比实际多 30 分钟。
+    - 本函数通过 _curr_min_lunch_cleaned() 剔除 11:30-13:00 的 90 分钟午休，保证下午已交易分钟数准确。
     """
     em = rt.get("elapsed_mins")
     if em is not None:
@@ -585,11 +591,14 @@ def _intraday_elapsed_minutes(rt: Dict[str, Any]) -> int:
     try:
         now = datetime.now(BJ_TZ)
         cm = now.hour * 60 + now.minute
-        if cm < 565 or cm > 900:
+        # 非交易时段：开盘前(09:25前)或收市后(15:00后) → 回退满额日估算
+        if cm < 565 or cm > 810:
             return 240
+        # 集合竞价阶段(09:25-09:30)：实际持续约5分钟，竞价成交量计入当日预估
         if 565 <= cm < 570:
-            return 1
-        return max(1, cm - 570)
+            return 5
+        # 正常交易时段：直接走午休清洗函数，剔除 11:30-13:00 的 90 分钟
+        return int(max(1, _curr_min_lunch_cleaned({"curr_min": float(cm)})))
     except Exception as _e:
         logging.getLogger(__name__).debug("_intraday_elapsed_minutes 异常回退 120: %s", _e, exc_info=True)
         return 120
