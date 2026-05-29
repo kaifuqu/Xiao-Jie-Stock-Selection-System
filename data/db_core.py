@@ -2599,42 +2599,42 @@ def get_latest_sector_ranking():
         logging.debug("get_latest_sector_ranking: 日线/维表缺失，返回空结果")
         return {}
 
-    con = get_read_conn_singleton()
-    if con is None:
-        logging.warning("get_latest_sector_ranking: 无法获取只读连接，返回空结果")
-        return {}
-    try:
-        last_date_row = con.execute("SELECT MAX(trade_date) FROM daily_data").fetchone()
-        if not last_date_row or not last_date_row[0]:
-            logging.debug("get_latest_sector_ranking: 未取到 latest trade_date，返回空结果")
+    with get_read_conn(max_wait_sec=30.0) as con:
+        if con is None:
+            logging.warning("get_latest_sector_ranking: 无法获取只读连接，返回空结果")
             return {}
-        last_date = last_date_row[0]
+        try:
+            last_date_row = con.execute("SELECT MAX(trade_date) FROM daily_data").fetchone()
+            if not last_date_row or not last_date_row[0]:
+                logging.debug("get_latest_sector_ranking: 未取到 latest trade_date，返回空结果")
+                return {}
+            last_date = last_date_row[0]
 
-        source_table = "vw_daily_data_compat" if table_exists("vw_daily_data_compat") else "daily_data"
-        dim_table = "dim_security" if table_exists("dim_security") else "stock_basic"
-        query = f"""
-            SELECT
-                b.industry,
-                AVG(d.pct_chg) as avg_pct_chg,
-                COUNT(d.ts_code) as stock_count
-            FROM {source_table} d
-            JOIN {dim_table} b ON d.ts_code = b.ts_code
-            WHERE d.trade_date = ?
-              AND b.industry IS NOT NULL
-              AND b.industry != ''
-            GROUP BY b.industry
-            HAVING COUNT(d.ts_code) >= 5
-            ORDER BY avg_pct_chg DESC
-        """
-        df_sector = con.execute(query, [last_date]).fetchdf()
+            source_table = "vw_daily_data_compat" if table_exists("vw_daily_data_compat") else "daily_data"
+            dim_table = "dim_security" if table_exists("dim_security") else "stock_basic"
+            query = f"""
+                SELECT
+                    b.industry,
+                    AVG(d.pct_chg) as avg_pct_chg,
+                    COUNT(d.ts_code) as stock_count
+                FROM {source_table} d
+                JOIN {dim_table} b ON d.ts_code = b.ts_code
+                WHERE d.trade_date = ?
+                  AND b.industry IS NOT NULL
+                  AND b.industry != ''
+                GROUP BY b.industry
+                HAVING COUNT(d.ts_code) >= 5
+                ORDER BY avg_pct_chg DESC
+            """
+            df_sector = con.execute(query, [last_date]).fetchdf()
 
-        if df_sector.empty:
-            logging.debug("get_latest_sector_ranking: 行业聚合结果为空，返回空映射")
+            if df_sector.empty:
+                logging.debug("get_latest_sector_ranking: 行业聚合结果为空，返回空映射")
+                return {}
+            return dict(zip(df_sector['industry'], df_sector['avg_pct_chg']))
+        except Exception as e:
+            logging.error("计算板块排名异常: %s", e, exc_info=True)
             return {}
-        return dict(zip(df_sector['industry'], df_sector['avg_pct_chg']))
-    except Exception as e:
-        logging.error("计算板块排名异常: %s", e, exc_info=True)
-        return {}
 
 
 def get_stock_industry(ts_code):

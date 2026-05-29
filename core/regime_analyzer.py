@@ -26,12 +26,12 @@ import pandas as pd
 
 try:
     from data.db_core import config as _db_config
-    from data.db_core import get_read_conn_singleton, table_exists
+    from data.db_core import get_read_conn, table_exists
 except ImportError as e:
     logging.warning("regime_analyzer 无法导入 db_core，盘面雷达将恒返回默认状态: %s", e)
     _db_config = {}
 
-    def get_read_conn_singleton():
+    def get_read_conn(**kwargs):
         raise RuntimeError("db_core 不可用")
 
     def table_exists(_name):
@@ -194,22 +194,22 @@ def _compute_market_regime_uncached() -> Dict[str, Any]:
         if not table_exists("daily_data"):
             return _default_regime()
 
-        con = get_read_conn_singleton()
-        if con is None:
-            return _default_regime()
+        with get_read_conn(max_wait_sec=30.0) as con:
+            if con is None:
+                return _default_regime()
 
-        has_sb = bool(table_exists("stock_basic"))
-        query = _build_regime_daily_aggregate_sql(rcfg, has_stock_basic=has_sb)
-        if not has_sb:
-            logging.info(
-                "regime_analyzer: 未检测到 stock_basic，ST 名称过滤已跳过；可在数据底座同步 stock_basic 后收紧口径。"
-            )
+            has_sb = bool(table_exists("stock_basic"))
+            query = _build_regime_daily_aggregate_sql(rcfg, has_stock_basic=has_sb)
+            if not has_sb:
+                logging.info(
+                    "regime_analyzer: 未检测到 stock_basic，ST 名称过滤已跳过；可在数据底座同步 stock_basic 后收紧口径。"
+                )
 
-        df = con.execute(query).fetchdf()
-        if df is None or df.empty or len(df) < min_sample:
-            return _default_regime()
+            df = con.execute(query).fetchdf()
+            if df is None or df.empty or len(df) < min_sample:
+                return _default_regime()
 
-        df = df.sort_values("trade_date", ascending=True).reset_index(drop=True)
+            df = df.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
         use_tail = min(primary_window, len(df))
         recent_up_mean = float(df["up_ratio"].tail(use_tail).mean())
