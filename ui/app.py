@@ -124,6 +124,7 @@ def _ui_cached_distinct_ts_codes_latest_trade_date() -> tuple[str, ...]:
     """
     P1 洗盘「终极兜底」用：最新交易日 distinct ts_code。
     仅缓存不可变元组；数据库连接在 with 内短时打开并立即释放，绝不缓存连接句柄。
+    【V26.7 优化】增加 max_wait_sec=30.0，避免与 sniper daemon 并发时被锁超时。
     """
     try:
         from data.db_core import get_read_conn
@@ -133,7 +134,7 @@ def _ui_cached_distinct_ts_codes_latest_trade_date() -> tuple[str, ...]:
             FROM daily_data
             WHERE trade_date = (SELECT MAX(trade_date) FROM daily_data)
         """
-        with get_read_conn(read_only=True) as con:
+        with get_read_conn(read_only=True, max_wait_sec=30.0) as con:
             rel = con.execute(_q)
             try:
                 df = rel.df()

@@ -914,7 +914,7 @@ def get_read_conn_singleton(*, max_wait_sec: float = 0.0):
     若本进程已建立写连接，则直接复用写连接读数据。
 
     max_wait_sec:
-        0  — 默认约 18s 内退避重试（适合 UI 高频查询）；
+        0  — 默认约 60s 内退避重试（适合 UI 启动场景，与 sniper daemon 并发时需要更长等待）；
         >0 — 最长等待秒数，用于守护进程在 Streamlit 占锁时仍能读到代码列表。
 
     【V26.7 关键修复】禁止缓存只读连接到 _read_con 全局变量。
@@ -924,7 +924,7 @@ def get_read_conn_singleton(*, max_wait_sec: float = 0.0):
     修复：只读连接每次按需创建，用完不缓存；写连接仍在 _write_con 全局单例（可读可写）。
     """
     global _read_con, _write_con
-    budget = float(max_wait_sec) if float(max_wait_sec) > 0 else 18.0
+    budget = float(max_wait_sec) if float(max_wait_sec) > 0 else 60.0
     deadline = time.time() + budget
     last_err: Optional[BaseException] = None
     attempt = 0
@@ -968,14 +968,15 @@ def get_read_conn_singleton(*, max_wait_sec: float = 0.0):
                         return _write_con
                     return None
         attempt += 1
-        if attempt == 1 or attempt % 8 == 0:
-            logging.warning(
+        # 【V26.7 优化】改用 debug 级别，避免与 sniper daemon 并发时警告刷屏
+        if attempt == 1 or attempt % 10 == 0:
+            logging.debug(
                 "DuckDB 只读连接受阻（另一进程可能占库），退避中 attempt=%s: %s",
                 attempt,
                 last_err,
             )
         time.sleep(min(8.0, 0.4 * (1.45 ** min(attempt, 14))))
-    logging.error("DuckDB 只读在 %.0fs 窗口内仍无法连接，返回空连接: %s", budget, last_err)
+    logging.warning("DuckDB 只读在 %.0fs 窗口内仍无法连接，返回空连接: %s", budget, last_err)
     return None
 
 
@@ -1009,9 +1010,15 @@ def get_write_conn():
 
 
 @contextmanager
-def get_read_conn(read_only: bool = True):
+def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
     """
     获取只读（或显式 read_only=False 的直连）连接。
+
+    参数：
+    - read_only: 是否只读模式
+    - max_wait_sec: 只读连接最大等待秒数
+      - 0（默认）：默认约 18s 内退避重试（适合 UI 高频查询）；
+      - >0：最长等待秒数，用于守护进程在 Streamlit 占锁时仍能读到代码列表。
 
     说明：
     - read_only=True 时优先复用进程内单例读/写连接，避免同库不同配置重复建连。
@@ -1021,7 +1028,7 @@ def get_read_conn(read_only: bool = True):
     con = None
     try:
         if read_only:
-            con = get_read_conn_singleton()
+            con = get_read_conn_singleton(max_wait_sec=max_wait_sec)
             if con is None:
                 if not os.path.exists(db_path):
                     with get_write_conn() as wc:
