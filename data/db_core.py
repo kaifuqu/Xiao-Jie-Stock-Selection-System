@@ -1026,6 +1026,7 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
     - read_only=False 时保留短连接语义，finally 中强制 close。
     """
     con = None
+    _is_singleton = False
     try:
         if read_only:
             con = get_read_conn_singleton(max_wait_sec=max_wait_sec)
@@ -1037,6 +1038,7 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
             # get_read_conn_singleton 返回 None 时走此 fallback
             # 【V26.7 修复】fallback 也必须检查写连接，避免配置冲突
             if _write_con is not None:
+                _is_singleton = True
                 yield _write_con
                 return
             con = _duckdb_connect_readonly()
@@ -1049,7 +1051,11 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
         con = _duckdb_connect_write()
         yield con
     finally:
-        if con is not None and not read_only:
+        # 【V26.8 关键修复】绝对不能关闭单例写连接 _write_con！
+        # 当 get_read_conn_singleton() 内部检测到 _write_con 已建立时，
+        # 会直接返回 _write_con（该连接由 get_conn() 的单例生命周期管理）。
+        # 若在 finally 中关闭，将导致同进程所有后续数据库操作遇到 "Connection already closed"。
+        if con is not None and con is not _write_con:
             try:
                 con.close()
             except Exception:
