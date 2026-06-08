@@ -20,6 +20,8 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from core.file_utils import atomic_json_update
+
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
@@ -61,16 +63,17 @@ def _read_pipeline_state() -> dict:
 
 
 def _write_pipeline_state_patch(**kwargs) -> None:
-    cur = _read_pipeline_state()
     now = datetime.now(BJ)
-    for k, v in kwargs.items():
-        if v is not None:
-            cur[k] = v
-    cur["updated_at"] = now.isoformat()
+
+    def _upd(cur: dict) -> None:
+        for k, v in kwargs.items():
+            if v is not None:
+                cur[k] = v
+        cur["updated_at"] = now.isoformat()
+
     try:
         os.makedirs(os.path.dirname(_PIPELINE_STATE) or ".", exist_ok=True)
-        with open(_PIPELINE_STATE, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False, indent=0)
+        atomic_json_update(_PIPELINE_STATE, _upd, timeout=5)
     except Exception as e:
         logging.warning("写入 pipeline 状态失败: %s", e)
 

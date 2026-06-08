@@ -89,14 +89,219 @@ _DEEPSEEK_SYSTEM_PROMPT = (
     "值得关注的现象：[列出2-3个值得留意的数据特征，注明正面或负面]\n"
     "数据空白与不确定性：[列出1-2个因数据缺失导致无法判断的点]\n\n"
     "要求：1. 每个字段用短句描述，基于给出的具体数值；2. 不输出买卖建议；3. 如数据不足，明确说明哪些指标缺失。"
+    "\n\n"
+    "【P3盘中池分析用 35字段说明】\n"
+    "\n"
+    "━━ 一、基础身份 ━━\n"
+    "1. code（股票代码）：交易所证券代码，如000001.SZ。\n"
+    "2. name（股票名称）：公开简称。\n"
+    "\n"
+    "━━ 二、核心行情 ━━\n"
+    "3. price（当前价格）：最新成交价，单位元。\n"
+    "4. pct_chg（今日涨幅%）：较昨收涨幅，是当日强弱的最直接指标。\n"
+    "5. realtime_pct_chg（实时涨幅%）：盘中实时涨幅，与pct_chg合并参考日内走势变化。\n"
+    "\n"
+    "━━ 三、系统评分与建议 ━━\n"
+    "6. score（综合评分）：系统对股票的整体评分（0-100），由P1基因分、爆发分、拥挤度等多因子加权得出，>80为优秀。\n"
+    "7. position（建议仓位）：系统给出的仓位参考，如「主仓候选20-30%」「试错仓位8-15%」「观察0-8%」，是直接操作建议。\n"
+    "\n"
+    "━━ 四、量价核心 ━━\n"
+    "8. volume_ratio（量比）：当日成交量/历史日均成交量，>2为放量，>5为巨量；量比急剧放大需配合位置判断是攻击还是派发。\n"
+    "9. turnover_rate_f（真换手率%）：真实流通盘换手率 = 成交量(手)*收盘价/流通市值，>10%为高度活跃，>20%为极度活跃需警惕。\n"
+    "10. amount（成交金额万元）：当日累计成交金额，绝对量指标，配合量比判断资金体量是否足以支撑趋势。\n"
+    "11. main_net_amount（主力净流入金额万元）：大单净买入额，正值为主力买入，负值为主力卖出，数据缺失时可参考realtime_main_inflow_rate。\n"
+    "12. realtime_main_inflow_rate（主力净流入占比%）：主力净流入/成交金额*100，正值代表大资金净买入，负值代表净卖出，>5%为明显流入。\n"
+    "\n"
+    "━━ 五、均线系统 ━━\n"
+    "13. ma5（5日均线）：近5日均价，反映短期资金平均成本，是超短期趋势基准。\n"
+    "14. ma10（10日均线）：近10日均价，过滤短期噪音，是中期趋势过滤线。\n"
+    "15. ma20（20日均线）：最重要的趋势基准线，站稳MA20代表中期多头排列；跌破MA20代表中期趋势转弱。\n"
+    "16. price_vs_ma20_pct（现价偏离MA20%）：标准化价格与MA20的关系，>0为在均线上方强势，<-5%为偏离过大有回归风险。\n"
+    "\n"
+    "━━ 六、日内价格结构 ━━\n"
+    "17. vwap（日内均价VWAP）：当日成交均价，代表当日所有参与者的平均成本区，是日内多空分水岭。\n"
+    "18. price_vs_vwap_pct（现价偏离VWAP%）：当前价格相对于VWAP的偏离度，>0为在参与者平均成本之上（浮盈区），<0为在成本之下（浮亏区）。\n"
+    "19. realtime_above_vwap（是否站稳VWAP）：布尔值，价格>=VWAP为True，代表日内多方主导；价格<VWAP为False，代表空方占优。\n"
+    "20. upper_shadow_ratio（上影线比例%）：上影线长度/昨收*100，反映盘中抛压；>2%为上影偏长，>3%为上影过长表明冲高受阻，是重要风险信号。\n"
+    "\n"
+    "━━ 七、MACD动量 ━━\n"
+    "21. macd_dif（DIF值）：MACD快线，正值代表多头趋势，负值代表空头趋势，数值大小反映趋势强度。\n"
+    "22. macd_dea（DEA值）：MACD慢线，DIF上穿DEA为金叉（看多信号），DIF下穿DEA为死叉（看空信号）。\n"
+    "23. macd_bar（MACD柱方向）：柱状图正值代表多头动能增强，负值代表空头动能增强，连续红柱为动能持续扩张，连续绿柱为动能持续萎缩。\n"
+    "\n"
+    "━━ 八、板块背景 ━━\n"
+    "24. top_industry（所属行业）：个股所属申万行业，板块强势为个股提供支撑，孤立上涨风险更高。\n"
+    "25. top_concept（所属概念）：个股涉及的主题概念，如AI、芯片、新能源等，概念契合当前市场主线时持续性更强。\n"
+    "\n"
+    "━━ 九、入池背景 ━━\n"
+    "26. entry_reason（入池理由）：系统选入P3池的具体触发条件，如「主线前排，容易走强」「承接好，能继续走」，提供分析前提背景。\n"
+    "27. tactic_name（战法名称）：触发入池的具体战法名称，不同战法分析框架不同，如「主升」看趋势持续，「回踩」看支撑有效性。\n"
+    "\n"
+    "━━ 十、系统特有指标 ━━\n"
+    "28. burst_score（爆发力评分）：系统综合量价异动程度得出的爆发力分（0-100），>80为强爆发，是进入P3的核心原因之一。\n"
+    "29. p3_veto_reason（否决原因）：如有否决原因说明存在已知硬性风险（如流通市值不足、涨跌停等），无否决时为空，是最重要的风险提示。\n"
+    "\n"
+    "━━ 十一、大盘环境 ━━\n"
+    "30. regime_state（市场状态）：当日大盘环境状态，如「强势」「弱势」「震荡」，不同市场环境下同一股票的判断逻辑不同，强势市场顺势操作胜率更高。\n"
+    "\n"
+    "━━ 十二、历史策略记忆 ━━\n"
+    "31. _t1_win_rate_pct（T1历史胜率%）：同类战法在过去相同市场条件下的T+1胜率，>60%为优秀，<40%为较差，是最直接的历史数据支撑。\n"
 )
+
+_DEEPSEEK_SYSTEM_PROMPT_P4 = (
+    "你是一位客观中立的A股市场数据分析师，仅基于用户提供的结构化数据进行事实性分析，"
+    "不对任何投资方向预设立场，不提供买卖建议。"
+    "分析时请严格区分：【已确认事实】（数据直接可得）与【基于经验的推测】（须明确标注），"
+    "不夸大有利因素，不淡化不利因素。"
+    "请按以下固定格式返回，每个字段独立一行：\n"
+    "关键数据摘录：[列出3-5个核心指标数值]\n"
+    "值得关注的现象：[列出2-3个值得留意的数据特征，注明正面或负面]\n"
+    "数据空白与不确定性：[列出1-2个因数据缺失导致无法判断的点]\n\n"
+    "要求：1. 每个字段用短句描述，基于给出的具体数值；2. 不输出买卖建议；3. 如数据不足，明确说明哪些指标缺失。"
+    "\n\n"
+    "【P4尾盘池分析用 35字段说明】\n"
+    "\n"
+    "━━ 一、基础身份 ━━\n"
+    "1. code（股票代码）：交易所证券代码，如000001.SZ。\n"
+    "2. name（股票名称）：公开简称。\n"
+    "\n"
+    "━━ 二、核心行情 ━━\n"
+    "3. price（收盘价）：当日收盘价，单位元，是尾盘阶段最重要的单一价格。\n"
+    "4. pct_chg（今日涨幅%）：较昨收涨幅，代表全天走势的最终结果。\n"
+    "\n"
+    "━━ 三、系统评分与建议 ━━\n"
+    "5. score（综合评分）：系统对股票的整体评分（0-100），>80为优秀。\n"
+    "6. position（建议仓位）：系统给出的仓位参考，如「主仓候选20-30%」「试错仓位8-15%」「观察0-8%」。\n"
+    "\n"
+    "━━ 四、量价核心 ━━\n"
+    "7. volume_ratio（量比）：当日成交量/历史日均成交量，>2为放量，>5为巨量；尾盘量比放大是资金进攻信号。\n"
+    "8. turnover_rate_f（真换手率%）：真实流通盘换手率，>10%为高度活跃，>20%为极度活跃需警惕派发。\n"
+    "9. amount（成交金额万元）：当日累计成交金额，配合量比判断资金体量是否足以支撑趋势。\n"
+    "10. main_net_amount（主力净流入金额万元）：东方财富DDE实时主力净流入(万元)，正值为主力买入；缺失时为Tushare日线大单净额。\n"
+    "11. realtime_main_inflow_rate（主力净流入占比%）：DDE主力净流入/成交额*100，正值代表大资金净买入，>5%为明显流入。\n"
+    "\n"
+    "━━ 五、均线系统 ━━\n"
+    "12. ma5（5日均线）：近5日均价，反映短期资金平均成本，是超短期趋势基准。\n"
+    "13. ma5_dev_pct（收盘价偏离MA5%）：标准化价格与MA5的关系，>0为在均线上方强势。\n"
+    "14. ma20（20日均线）：最重要的趋势基准线，站稳MA20代表中期多头排列；跌破MA20代表中期趋势转弱。\n"
+    "15. ma20_dev_pct（收盘价偏离MA20%）：标准化价格与MA20的关系，>0为强势，<-5%为偏离过大有回归风险。\n"
+    "16. ma60（60日均线）：长期趋势基准，收盘价在MA60上方代表长期多头。\n"
+    "\n"
+    "━━ 六、尾盘VWAP结构 ━━\n"
+    "17. vwap（日内均价VWAP）：当日成交均价，是日内所有参与者的平均成本区。\n"
+    "18. vwap_dev_pct（收盘价偏离VWAP%）：收盘价相对VWAP的偏离度，>0为浮盈区，<0为浮亏区。\n"
+    "19. realtime_above_vwap（是否站稳VWAP）：布尔值，收盘>=VWAP为True，代表尾盘多方占优。\n"
+    "20. upper_shadow_ratio（上影线比例%）：上影线长度/昨收*100，>2%为上影偏长，>3%为冲高受阻信号。\n"
+    "\n"
+    "━━ 七、MACD动量 ━━\n"
+    "21. macd_dif（DIF值）：MACD快线，正值代表多头趋势，负值代表空头趋势。\n"
+    "22. macd_dea（DEA值）：MACD慢线，DIF上穿DEA为金叉（看多信号），DIF下穿DEA为死叉（看空信号）。\n"
+    "23. macd_bar（MACD柱方向）：柱状图正值代表多头动能增强，负值代表空头动能增强，连续红柱为动能持续扩张。\n"
+    "\n"
+    "━━ 八、板块背景 ━━\n"
+    "24. top_industry（所属行业）：个股所属申万行业，板块强势为个股提供支撑。\n"
+    "25. top_concept（所属概念）：个股涉及的主题概念，如AI、芯片、新能源等。\n"
+    "\n"
+    "━━ 九、入池背景 ━━\n"
+    "26. entry_reason（入池理由）：系统选入P4池的具体触发条件，如「尾盘强势封板」「主线前排」等。\n"
+    "27. tactic_name（战法名称）：触发入池的具体战法名称，如「P4-01·★光头阳线抢筹」。\n"
+    "\n"
+    "━━ 十、系统特有指标 ━━\n"
+    "28. burst_score（爆发力评分）：系统综合量价异动程度得出的爆发力分（0-100），>80为强爆发。\n"
+    "29. p4_veto_reason（否决原因）：如有否决原因说明存在已知硬性风险，无否决时为空。\n"
+    "30. exec_tier（执行层级）：系统给出的执行建议，A/B/C三级。\n"
+    "\n"
+    "━━ 十一、拥挤度与风险标签 ━━\n"
+    "31. crowding_score（拥挤度评分）：同概念/板块的选入拥挤程度，>70为高度拥挤。\n"
+    "32. risk_tags（风险标签）：系统标注的风险点，如「【拥挤降权x0.85】」「【缩量辅助观察】」等。\n"
+    "\n"
+    "━━ 十二、市场环境 ━━\n"
+    "33. regime_state（市场状态）：当日大盘环境状态，如「强势」「弱势」「震荡」。\n"
+    "34. amount（成交金额万元）：全日成交金额，是判断尾盘资金体量的核心指标。\n"
+    "35. vwap_dev_pct（收盘VWAP偏离%）：收盘价偏离VWAP的综合判断，是尾盘质量的核心指标。\n"
+)
+
+_DEEPSEEK_SYSTEM_PROMPT_P5 = (
+    "你是一位客观中立的A股市场数据分析师，仅基于用户提供的结构化数据进行事实性分析，"
+    "不对任何投资方向预设立场，不提供买卖建议。"
+    "分析时请严格区分：【已确认事实】（数据直接可得）与【基于经验的推测】（须明确标注），"
+    "不夸大有利因素，不淡化不利因素。"
+    "请按以下固定格式返回，每个字段独立一行：\n"
+    "关键数据摘录：[列出3-5个核心指标数值]\n"
+    "值得关注的现象：[列出2-3个值得留意的数据特征，注明正面或负面]\n"
+    "数据空白与不确定性：[列出1-2个因数据缺失导致无法判断的点]\n\n"
+    "要求：1. 每个字段用短句描述，基于给出的具体数值；2. 不输出买卖建议；3. 如数据不足，明确说明哪些指标缺失。"
+    "\n\n"
+    "【P5盘后池分析用 35字段说明】\n"
+    "\n"
+    "━━ 一、基础身份 ━━\n"
+    "1. code（股票代码）：交易所证券代码，如000001.SZ。\n"
+    "2. name（股票名称）：公开简称。\n"
+    "\n"
+    "━━ 二、核心行情 ━━\n"
+    "3. price（收盘价）：当日收盘价，单位元。\n"
+    "4. pct_chg（今日涨幅%）：较昨收涨幅，是当日强弱的最直接指标。\n"
+    "\n"
+    "━━ 三、系统评分与建议 ━━\n"
+    "5. score（综合评分）：系统对股票的整体评分（0-100），>80为优秀。\n"
+    "6. position（建议仓位）：系统给出的仓位参考，如「主仓候选20-30%」「试错仓位8-15%」「观察0-8%」。\n"
+    "\n"
+    "━━ 四、量价核心 ━━\n"
+    "7. volume_ratio（量比）：当日成交量/历史日均成交量，>2为放量，>5为巨量。\n"
+    "8. turnover_rate_f（真换手率%）：真实流通盘换手率，>10%为高度活跃，>20%为极度活跃需警惕。\n"
+    "9. amount（成交金额万元）：当日累计成交金额。\n"
+    "10. main_net_amount（主力净流入金额万元）：东方财富DDE主力净流入(万元)，正值为主力买入。\n"
+    "11. realtime_main_inflow_rate（主力净流入占比%）：DDE主力净流入/成交额*100，>5%为明显流入。\n"
+    "\n"
+    "━━ 五、均线系统 ━━\n"
+    "12. ma5（5日均线）：近5日均价，反映短期资金平均成本。\n"
+    "13. ma5_dev_pct（收盘价偏离MA5%）：标准化价格与MA5的关系，>0为在均线上方强势。\n"
+    "14. ma20（20日均线）：最重要的趋势基准线，站稳MA20代表中期多头排列；跌破MA20代表中期趋势转弱。\n"
+    "15. ma20_dev_pct（收盘价偏离MA20%）：标准化价格与MA20的关系，>0为强势，<-5%为偏离过大有回归风险。\n"
+    "16. ma60（60日均线）：长期趋势基准，收盘价在MA60上方代表长期多头。\n"
+    "\n"
+    "━━ 六、全日价格结构 ━━\n"
+    "17. vwap（日内均价VWAP）：当日成交均价，是多空分水岭。\n"
+    "18. vwap_dev_pct（收盘价偏离VWAP%）：收盘价相对VWAP的偏离度，>0为浮盈区，<0为浮亏区。\n"
+    "19. realtime_above_vwap（是否站稳VWAP）：布尔值，收盘>=VWAP为True。\n"
+    "20. vol_ratio_score（量比位置化分）：量比相对市场均值的标准化分（0-100），反映量能质量的相对位置。\n"
+    "\n"
+    "━━ 七、趋势与动量 ━━\n"
+    "21. macd_dif（DIF值）：MACD快线，正值代表多头趋势，负值代表空头趋势。\n"
+    "22. macd_dea（DEA值）：MACD慢线，DIF上穿DEA为金叉，DIF下穿DEA为死叉。\n"
+    "23. macd_bar（MACD柱方向）：柱状图正值代表多头动能增强，连续红柱为动能持续扩张。\n"
+    "24. ma_momentum_score（MA动能多头分）：均线系统多头共振程度（0-100），>60为均线多头排列。\n"
+    "\n"
+    "━━ 八、P5特有质量指标 ━━\n"
+    "25. vwap_penalty_mult（VWAP惩罚乘子）：收盘价偏离VWAP越大则惩罚越重，取值<1.0时为惩罚，是尾盘质量的核心量化。\n"
+    "26. hit_dimension_count（命中维度数）：当日同时命中的战法维度数量（1-5），越多代表信号越强。\n"
+    "27. risk_level（风险等级）：系统给出的风险评级，如「中」「中高」「高」，>高则需谨慎。\n"
+    "\n"
+    "━━ 九、板块背景 ━━\n"
+    "28. top_industry（所属行业）：个股所属申万行业，板块强势为个股提供支撑。\n"
+    "29. top_concept（所属概念）：个股涉及的主题概念。\n"
+    "\n"
+    "━━ 十、入池背景 ━━\n"
+    "30. entry_reason（入池理由）：系统选入P5池的具体触发条件，如「主线前排共振入选」。\n"
+    "31. tactic_name（战法名称）：触发入池的具体战法名称，如「P5-05·★绝对趋势雷达」。\n"
+    "\n"
+    "━━ 十一、系统特有指标 ━━\n"
+    "32. burst_score（爆发力评分）：系统综合量价异动程度得出的爆发力分（0-100），>80为强爆发。\n"
+    "33. p5_veto_reason（否决原因）：如有否决原因说明存在已知硬性风险，无否决时为空。\n"
+    "34. exec_tier（执行层级）：系统给出的执行建议，A/B/C三级。\n"
+    "\n"
+    "━━ 十二、市场环境与拥挤 ━━\n"
+    "35. regime_state（市场状态）：当日大盘环境状态，如「强势」「弱势」「震荡」，强势市场顺势操作胜率更高。\n"
+)
+
+
 
 
 _DEEPSEEK_POOL_FOCUS = {
     "p2": "P2竞价池：集合竞价阶段。关注开盘涨幅、竞价量、换手率、量比与昨日成交的对比。",
-    "p3": "P3盘中池：盘中交易阶段。关注实时涨幅、量比变化、均线位置、主力资金流向与成交额。",
-    "p4": "P4尾盘池：尾盘收盘阶段。关注收盘涨幅、全天量价配合、尾盘成交节奏、均线偏离与市场整体情绪。",
-    "p5": "P5盘后池：收盘复盘阶段。关注全天涨幅、量比、趋势指标、主力资金、换手率、行业板块与财务数据。",
+    "p3": "P3盘中池：盘中交易阶段。关注实时涨幅、量比、真换手率、均线偏离、VWAP偏离、主力资金流向、MACD动量与大盘环境。",
+    "p4": "P4尾盘池：尾盘收盘阶段。关注收盘涨幅、全天量价配合、尾盘成交节奏、均线偏离、VWAP偏离、主力资金流向与市场整体情绪。",
+    "p5": "P5盘后池：收盘复盘阶段。关注全天涨幅、量比、趋势指标、均线偏离、VWAP偏离、主力资金、换手率、行业板块与财务数据。",
 }
 
 _DEEPSEEK_POOL_SEMANTICS = {
@@ -110,23 +315,23 @@ _DEEPSEEK_POOL_SEMANTICS = {
     "p3": {
         "name": "盘中阶段",
         "time_window": "盘中连续竞价",
-        "core_question": "全天价格与成交量变化的主要特征",
-        "what_to_observe": "实时涨幅变化、量比波动、均线系统位置、主力资金净流入方向与成交额",
-        "what_to_note": "注意甄别：量比放大需区分主动性买盘还是对倒；主力净流入需看持续性而非单一时点",
+        "core_question": "实时价格走势与量能、资金、动量的配合质量",
+        "what_to_observe": "实时涨幅变化、量比与真换手率、均线偏离程度、VWAP偏离方向与幅度、主力资金净流入占比与方向、MACD柱状图方向与大盘环境状态",
+        "what_to_note": "注意甄别：量比放大需区分主动性买盘还是对倒；主力净流入需看持续性而非单一时点；真换手率>20%时需警惕派发风险；上影线过长是冲高受阻信号",
     },
     "p4": {
         "name": "尾盘阶段",
         "time_window": "尾盘收盘前30分钟",
-        "core_question": "尾盘价格行为与全天走势的呼应关系",
-        "what_to_observe": "尾盘涨幅、成交量变化、均线偏离度、尾盘成交额占全天比例与市场情绪指标",
-        "what_to_note": "注意甄别：尾盘急涨可能为次日出货留空间；无量推涨的持续性存疑",
+        "core_question": "尾盘价格行为与全天走势的呼应关系，以及尾盘资金的攻击质量",
+        "what_to_observe": "尾盘涨幅、全天量比变化、均线偏离程度、VWAP偏离方向与幅度、主力资金净流入占比与方向、MACD柱状图方向与市场情绪指标",
+        "what_to_note": "注意甄别：尾盘急涨可能为次日出货留空间；无量推涨的持续性存疑；真换手率>20%时需警惕派发风险",
     },
     "p5": {
         "name": "盘后阶段",
         "time_window": "收盘后复盘",
         "core_question": "全天走势的技术面与资金面特征，以及财务数据的基本情况",
-        "what_to_observe": "全天涨幅量价比、趋势指标状态、主力资金净额与方向、换手率水平、行业板块与财务数据",
-        "what_to_note": "注意甄别：单日数据有限，历史规律不等于未来走势；财务数据存在滞后性",
+        "what_to_observe": "全天涨幅量价比、均线偏离程度、VWAP偏离方向与幅度、趋势指标状态、主力资金净额与方向、换手率水平、行业板块与财务数据（PE/ROE等）",
+        "what_to_note": "注意甄别：单日数据有限，历史规律不等于未来走势；财务数据存在滞后性；量比位置化分与VWAP惩罚乘子反映的是相对质量而非绝对信号",
     },
 }
 
@@ -283,6 +488,7 @@ _DEEPSEEK_FIELD_ALIASES = {
     "volume": ("volume", "vol", "成交量"),
     "turnover_rate": ("turnover_rate", "换手率"),
     "realtime_turnover_rate": ("realtime_turnover_rate", "实时换手率", "rt_turnover_rate"),
+    "turnover_rate_f": ("turnover_rate_f", "真换手率", "真换手"),
     "amount": ("amount", "成交额", "成交金额"),
     "volume_ratio": ("volume_ratio", "量比", "量比_昨", "盘前/昨日量比"),
     "realtime_volume_ratio": ("realtime_volume_ratio", "实时量比", "rt_volume_ratio"),
@@ -317,6 +523,8 @@ _DEEPSEEK_FIELD_ALIASES = {
     "emotion_score": ("emotion_score", "情绪分数"),
     "top_industry": ("top_industry", "主线行业", "industry"),
     "top_concept": ("top_concept", "主线概念", "concept", "概念"),
+    "dde_main_net": ("dde_main_net", "主力净流入金额", "main_net_amount", "主力净额"),
+    "dde_main_rate": ("dde_main_rate", "DDE主力净流入占比", "realtime_main_inflow_rate"),
     "realtime_main_inflow_rate": ("realtime_main_inflow_rate", "实时主力净流入占比", "main_inflow_rate"),
     "realtime_triggered": ("realtime_triggered", "盘中是否已触发"),
     "realtime_above_vwap": ("realtime_above_vwap", "现价是否高于VWAP", "above_vwap"),
@@ -837,7 +1045,8 @@ def _enrich_deepseek_derived_fields(pool_key: str, clean: Dict[str, Any], stock_
     if pk == "p3":
         for key in ("burst_score", "surge_bonus", "penalty", "p3_core_screener_pass",
                      "p3_veto_reason", "p3_strategy_checks", "risk_tags",
-                     "suggested_min_entry_score", "risk_control", "entry_reason"):
+                     "suggested_min_entry_score", "risk_control", "entry_reason",
+                     "turnover_rate_f", "dde_main_net", "dde_main_rate"):
             if key in stock_dict and key not in clean:
                 val = stock_dict[key]
                 if val not in (None, "", []):
@@ -866,7 +1075,15 @@ def _enrich_deepseek_derived_fields(pool_key: str, clean: Dict[str, Any], stock_
     if pk == "p4":
         for key in ("p4_core_screener_pass", "p4_veto_reason", "p4_strategy_checks",
                      "risk_tags", "suggested_min_entry_score", "risk_control",
-                     "tail_signal", "tail_pattern", "tail_score"):
+                     "tail_signal", "tail_pattern", "tail_score",
+                     "vwap_dev_pct", "vwap", "price_vs_vwap_pct", "realtime_above_vwap",
+                     "ma5", "ma5_dev_pct", "ma10", "ma10_dev_pct",
+                     "ma20", "ma20_dev_pct", "ma60", "ma60_dev_pct",
+                     "macd_dif", "macd_dea", "macd_bar",
+                     "upper_shadow_ratio",
+                     "dde_main_net", "dde_main_rate",
+                     "main_net_amount", "realtime_main_inflow_rate",
+                     "entry_reason", "tactic_name"):
             if key in stock_dict and key not in clean:
                 val = stock_dict[key]
                 if val not in (None, "", []):
@@ -879,8 +1096,7 @@ def _enrich_deepseek_derived_fields(pool_key: str, clean: Dict[str, Any], stock_
                 if val is not None:
                     clean[key] = val
         # P4 尾盘特有指标
-        for key in ("close_price", "close_ma5_ratio", "close_ma10_ratio",
-                     "late_volume_ratio", "late_main_net"):
+        for key in ("close_price", "late_volume_ratio", "late_main_net"):
             if key in stock_dict and key not in clean:
                 val = stock_dict[key]
                 if val is not None:
@@ -890,34 +1106,28 @@ def _enrich_deepseek_derived_fields(pool_key: str, clean: Dict[str, Any], stock_
     if pk == "p5":
         for key in ("p5_core_screener_pass", "p5_veto_reason", "p5_strategy_checks",
                      "risk_tags", "suggested_min_entry_score", "risk_control",
-                     "postmarket_signal", "postmarket_pattern", "postmarket_score"):
+                     "postmarket_signal", "postmarket_pattern", "postmarket_score",
+                     "vwap_dev_pct", "vwap", "price_vs_vwap_pct", "realtime_above_vwap",
+                     "ma5", "ma5_dev_pct", "ma10", "ma10_dev_pct",
+                     "ma20", "ma20_dev_pct", "ma60", "ma60_dev_pct",
+                     "macd_dif", "macd_dea", "macd_bar",
+                     "dde_main_net", "dde_main_rate",
+                     "main_net_amount", "realtime_main_inflow_rate",
+                     "entry_reason", "tactic_name",
+                     "vol_ratio_score", "vwap_penalty_mult", "hit_dimension_count",
+                     "ma_momentum_score", "regime_state", "risk_level"):
             if key in stock_dict and key not in clean:
                 val = stock_dict[key]
                 if val not in (None, "", []):
                     clean[key] = val
-        # P5 盘后/财务因子
-        for key in ("financial_score", "fund_score", "pe_ttm", "pb", "roe",
-                     "revenue_growth", "net_profit_growth", "eps"):
-            if key in stock_dict and key not in clean:
-                val = stock_dict[key]
-                if val is not None:
-                    clean[key] = val
-        # P5 长周期指标
-        for key in ("weekly_ma5_ratio", "weekly_ma10_ratio", "weekly_ma20_ratio",
-                     "monthly_trend", "long_term_ma_ratio"):
-            if key in stock_dict and key not in clean:
-                val = stock_dict[key]
-                if val is not None:
-                    clean[key] = val
-        # P5 财务快照补充
-        if "financial" not in clean:
-            fin: Dict[str, Any] = {}
-            for fk in ("pe_ttm", "pb", "roe", "revenue_growth", "net_profit_growth", "eps"):
-                fv = stock_dict.get(fk)
-                if fv is not None:
-                    fin[fk] = fv
-            if fin:
-                clean["financial"] = fin
+        # P5 财务快照补充（从 stock_dict 直接读取）
+        fin: Dict[str, Any] = {}
+        for fk in ("pe_ttm", "pb", "roe", "revenue_growth", "net_profit_growth", "eps"):
+            fv = stock_dict.get(fk)
+            if fv is not None and not _is_deepseek_empty_value(fv):
+                fin[fk] = fv
+        if fin:
+            clean.setdefault("financial", {}).update(fin)
 
     # === 15. 共性兜底：stock_dict 中未被上述处理的数值字段 ===
     for key, val in stock_dict.items():
@@ -1205,6 +1415,14 @@ def _maybe_get_deepseek_advice(pool_key: str, stock_dict: Dict[str, Any]) -> str
     stock_info = _build_deepseek_stock_payload(pk, stock_dict)
     pool_focus = _DEEPSEEK_POOL_FOCUS.get(pk, "关注当日价格与成交量的基本数据特征。")
 
+    # 按池子选择专用 prompt（优先池子专用版，其次通用版）
+    _pool_prompts = {
+        "p3": _DEEPSEEK_SYSTEM_PROMPT,
+        "p4": _DEEPSEEK_SYSTEM_PROMPT_P4,
+        "p5": _DEEPSEEK_SYSTEM_PROMPT_P5,
+    }
+    _system_prompt = _pool_prompts.get(pk, _DEEPSEEK_SYSTEM_PROMPT)
+
     def _build_payload(*, enable_thinking: bool, token_budget: int, concise_retry: bool = False) -> Dict[str, Any]:
         user_prompt = (
             f"当前池子：{pk.upper()}\n"
@@ -1224,7 +1442,7 @@ def _maybe_get_deepseek_advice(pool_key: str, stock_dict: Dict[str, Any]) -> str
         payload_local: Dict[str, Any] = {
             "model": model,
             "messages": [
-                {"role": "system", "content": _DEEPSEEK_SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "max_tokens": int(token_budget),

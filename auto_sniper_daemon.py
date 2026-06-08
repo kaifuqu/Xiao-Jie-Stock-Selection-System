@@ -58,6 +58,8 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from core.file_utils import atomic_json_update
+
 # ---------- 项目根路径 ----------
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _PROJECT_ROOT not in sys.path:
@@ -453,8 +455,12 @@ def _write_daemon_public_meta() -> None:
             "started_at_bj": _now_bj().isoformat(),
         }
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        def _upd(root: dict) -> None:
+            root.clear()
+            root.update(payload)
+
+        atomic_json_update(p, _upd, timeout=5)
         logger.info("运维说明已写入 %s", _DAEMON_PUBLIC_META_REL)
     except Exception as e:
         logger.debug("daemon_public_meta 写入失败: %s", e)
@@ -562,8 +568,12 @@ def _save_cal_file(today_yyyymmdd: str, is_open: bool) -> None:
             "is_open": is_open,
             "updated_at": _now_bj().isoformat(),
         }
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=0)
+
+        def _upd(root: dict) -> None:
+            root.clear()
+            root.update(payload)
+
+        atomic_json_update(p, _upd, timeout=5)
     except Exception as e:
         logger.debug("写入交易日历本地缓存失败: %s", e)
 
@@ -761,28 +771,31 @@ def _save_base_items_json(
             row["df_split"] = None
         rows.append(row)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+
+    def _upd(root: dict) -> None:
         if p1_envelope_source in ("UI_MANUAL", "DAEMON_AUTO"):
-            # P1 底仓 JSON：顶层主权元数据，与 core.pool_manager.p1_cache_json_should_skip_daemon_overwrite 对齐
             _ts = _now_bj().isoformat()
-            json.dump(
+            root.clear()
+            root.update(
                 {
                     "_source": str(p1_envelope_source),
                     "_timestamp": _ts,
                     "items": rows,
-                },
-                f,
-                ensure_ascii=False,
-                indent=0,
+                }
             )
         else:
-            json.dump(rows, f, ensure_ascii=False, indent=0)
+            root.clear()
+            root["items"] = rows
+            root["_legacy_array"] = True
+
+    atomic_json_update(path, _upd, timeout=5)
 
 
 def _load_base_items_json(path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
-    # 兼容新版带主权封套 {"_source","_timestamp","items"} 与旧版顶层数组
+    # 兼容新版带主权封套 {"_source","_timestamp","items"}、原子写兼容封套 {"items", "_legacy_array": true}
+    # 与旧版顶层数组
     if isinstance(raw, dict) and isinstance(raw.get("items"), list):
         rows = raw["items"]
     elif isinstance(raw, list):
@@ -1714,10 +1727,14 @@ def _evening_sync_only_pipeline() -> None:
     logger.info("晚间增量同步完成 | BJ日期=%s（19:55 将执行 P1+推送；20:05 将执行 P5）", today)
     _notify_daemon_alert(
         "晚间链：日线增量同步已完成",
-        f"日期 {today}（北京时间）：自动增量同步成功；**19:55** P1 与 ≥75 推送；**20:05** P5 盘后扫描。", 
+        f"日期 {today}（北京时间）：自动增量同步成功；**19:55** P1 与 ≥75 推送；**20:05** P5 盘后扫描。",
         category="data_sync",
         dedup_key=f"daemon_evening_sync_ok_{today}",
     )
+
+    # 【V26.6 每日压缩】晚间同步成功后，立即投递独立子进程执行 DuckDB CHECKPOINT+VACUUM。
+    # 子进程内部会等待 daemon 看门狗自然退出（~60s），不抢占 _SCAN_BUSY。
+    _dispatch_daily_vacuum_subprocess()
 
 
 def _evening_p1_rebuild_pipeline() -> None:
@@ -2030,6 +2047,52 @@ def _rebuild_p1_cache_job(*, require_trading_day_barrier: bool = True) -> bool:
             pass
         gc.collect()
     return ok_out
+
+
+def _dispatch_daily_vacuum_subprocess() -> None:
+    """
+    每日 19:45 同步成功后投递 tools/daily_db_vacuum.py 独立子进程。
+    子进程内部会：
+      1. 等待 daemon 自然退出（看门狗约 60s）
+      2. 删除前日 DuckDB 备份文件
+      3. 执行 CHECKPOINT + ANALYZE + VACUUM 多轮压缩
+      4. 写入 pipeline_state 体积记录
+      5. 企微推送压缩前后对比
+
+    与 weekly_db_maintenance_orchestrated.py 的区别：
+    - daily：每日 19:50 左右，仅压缩（不删除数据），幂等（次日才可重跑）
+    - weekly：每周日凌晨 03:30，深度维护，ISO 周去重
+    """
+    script_path = os.path.join(_PROJECT_ROOT, "tools", "daily_db_vacuum.py")
+    if not os.path.isfile(script_path):
+        logger.warning("每日压缩脚本不存在: %s，跳过", script_path)
+        return
+
+    try:
+        popen_kw: Dict[str, Any] = {
+            "cwd": _PROJECT_ROOT,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            popen_kw["creationflags"] = int(subprocess.DETACHED_PROCESS) | int(
+                subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            popen_kw["start_new_session"] = True
+
+        subprocess.Popen(
+            [sys.executable, script_path],
+            **popen_kw,
+        )
+        logger.info(
+            "每日 DuckDB 压缩子进程已投递 | script=%s | "
+            "daemon 将在约 60s 后被看门狗重启，届时子进程独占连接执行 VACUUM",
+            script_path,
+        )
+    except Exception as e:
+        logger.exception("投递每日压缩子进程失败: %s", e)
 
 
 def _spawn(
@@ -2499,7 +2562,7 @@ def main() -> None:
         "已注册：08:50清企微防刷+早盘补位 | 09:18早盘合并简报企微(独立线程,预检) | 09:26 P2竞价 | 分时快照六槽(14:39=slot1440 错峰) | "
         "P3×%ss降频(14:31起停派让路P4) | 每周心跳 09:20(每周1条) | 每周库维护 03:30(独立编排VACUUM,见weekly_maintenance.log) | "
         "P4×%ss降频(14:31起停派让路P3) | P4每拍等锁%ss | 重仓核心窗 %02d:%02d~%02d:%02d | "
-        "19:45晚间增量 | 19:55晚间P1 | 20:05晚间P5 | 09:35 P5早盘验证 | 非交易日跳过", 
+        "19:45晚间增量→投递每日DuckDB压缩子进程→daemon退出→看门狗重启→VACUUM执行 | 19:55晚间P1 | 20:05晚间P5 | 09:35 P5早盘验证 | 非交易日跳过", 
         P3_POLL_INTERVAL_SECONDS,
         P4_POLL_INTERVAL_SECONDS,
         int(P4_TAIL_WAIT_LOCK_SEC),

@@ -33,7 +33,8 @@ try:
         path_wash_metrics_json,
         ensure_runtime_data_layout,
     )
-except ImportError:
+except ImportError as e:
+    logging.exception("ui.app 无法导入 runtime_data_paths，已降级到旧路径兼容模式: %s", e)
     def ensure_runtime_data_layout():
         os.makedirs("data", exist_ok=True)
 
@@ -69,11 +70,12 @@ except ImportError:
 
 try:
     import constants
-except ImportError:
+except ImportError as e:
 
     class _ConstShim:
         APP_VERSION = "V26.6"
 
+    logging.exception("ui.app 无法导入 constants，已降级为最小常量兼容模式: %s", e)
     constants = _ConstShim()
 
 import time
@@ -1130,28 +1132,31 @@ def _save_base_items_json(path, items, *, p1_envelope_source=None):
             row["df_split"] = None
         rows.append(row)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+
+    def _upd(root):
         if p1_envelope_source in ("UI_MANUAL", "DAEMON_AUTO"):
-            # P1 底仓 JSON：顶层主权元数据，与守护进程 pool_manager.p1_cache_json_should_skip_daemon_overwrite 对齐
             _ts = datetime.now(timezone(timedelta(hours=8))).isoformat()
-            json.dump(
+            root.clear()
+            root.update(
                 {
                     "_source": str(p1_envelope_source),
                     "_timestamp": _ts,
                     "items": rows,
-                },
-                f,
-                ensure_ascii=False,
-                indent=0,
+                }
             )
         else:
-            json.dump(rows, f, ensure_ascii=False, indent=0)
+            root.clear()
+            root["items"] = rows
+            root["_legacy_array"] = True
+
+    atomic_json_update(path, _upd, timeout=5)
 
 
 def _load_base_items_json(path):
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
-    # 兼容新版带主权封套 {"_source","_timestamp","items"} 与旧版顶层数组
+    # 兼容新版带主权封套 {"_source","_timestamp","items"}、原子写兼容封套 {"items", "_legacy_array": true}
+    # 与旧版顶层数组
     if isinstance(raw, dict) and isinstance(raw.get("items"), list):
         rows = raw["items"]
     elif isinstance(raw, list):
@@ -1203,8 +1208,13 @@ def _load_base_items_maybe_legacy(json_path, pkl_path, label):
 
 def _save_rejected_json(path, items):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(items if isinstance(items, list) else [], f, ensure_ascii=False, indent=0)
+
+    def _upd(root):
+        root.clear()
+        root["items"] = items if isinstance(items, list) else []
+        root["updated_at"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
+
+    atomic_json_update(path, _upd, timeout=5)
 
 
 def _load_rejected_maybe_legacy(json_path, pkl_path, label):
@@ -1212,6 +1222,8 @@ def _load_rejected_maybe_legacy(json_path, pkl_path, label):
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                return data["items"]
             return data if isinstance(data, list) else []
         except Exception as e:
             logging.warning("【审计修复】维度6-读取 %s 阵亡 JSON 失败，将尝试 pickle: %s", label, e)
@@ -1952,16 +1964,18 @@ def execute_scan(target_pool_list):
                 try:
                     _p1_lab_meta_path = path_p1_last_wash_input_codes_json()
                     os.makedirs("data", exist_ok=True)
-                    with open(_p1_lab_meta_path, "w", encoding="utf-8") as _lf:
-                        json.dump(
+
+                    def _upd(root):
+                        root.clear()
+                        root.update(
                             {
                                 "codes": _codes_lab,
                                 "revision": int(st.session_state["p1_last_wash_input_revision"]),
                                 "saved_at": today_str,
-                            },
-                            _lf,
-                            ensure_ascii=False,
+                            }
                         )
+
+                    atomic_json_update(_p1_lab_meta_path, _upd, timeout=5)
                 except Exception as _e_lab_meta:
                     logging.debug("写入 P1 实验室候选存档失败: %s", _e_lab_meta)
 

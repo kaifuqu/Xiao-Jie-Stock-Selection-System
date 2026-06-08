@@ -46,21 +46,22 @@ import yaml
 # ---------------------------------------------------------------------------
 try:
     from core.indicator_calc import precompute_indicators
-except ImportError:
+except ImportError as e:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     if project_root not in sys.path:
         sys.path.append(project_root)
     try:
         from core.indicator_calc import precompute_indicators
-    except ImportError:
-        logging.warning("⚠️ 无法导入 precompute_indicators，请确保 core/indicator_calc.py 存在。")
+    except ImportError as e2:
+        logging.exception("db_core 无法导入 precompute_indicators，已降级为恒等映射: %s", e2)
         # 恒等映射：下游仍可运行，但无衍生指标（由 get_stock_data_qfq 内兜底补列）
         precompute_indicators = lambda x: x
 
 try:
     from core.stock_name_utils import normalize_stock_display_name
-except ImportError:
+except ImportError as e:
+    logging.exception("db_core 无法导入 normalize_stock_display_name，已降级为基础字符串清洗: %s", e)
     def normalize_stock_display_name(name):
         return str(name or "").strip()
 
@@ -1026,19 +1027,19 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
     - read_only=False 时保留短连接语义，finally 中强制 close。
     """
     con = None
-    _is_singleton = False
     try:
         if read_only:
             con = get_read_conn_singleton(max_wait_sec=max_wait_sec)
-            if con is None:
-                if not os.path.exists(db_path):
-                    with get_write_conn() as wc:
-                        yield wc
-                    return
+            if con is not None:
+                yield con
+                return
+            if not os.path.exists(db_path):
+                with get_write_conn() as wc:
+                    yield wc
+                return
             # get_read_conn_singleton 返回 None 时走此 fallback
             # 【V26.7 修复】fallback 也必须检查写连接，避免配置冲突
             if _write_con is not None:
-                _is_singleton = True
                 yield _write_con
                 return
             con = _duckdb_connect_readonly()
@@ -2555,8 +2556,13 @@ def sync_stock_basic():
                 nm = str(row.get("name", "")).strip()
                 if tc and nm and nm not in ("nan", "None", ""):
                     name_dict[tc] = nm
-            with open(stock_names_json_path, "w", encoding="utf-8") as f:
-                json.dump(name_dict, f, ensure_ascii=False, indent=2)
+
+            def _upd(root):
+                root.clear()
+                root.update(name_dict)
+
+            from core.file_utils import atomic_json_update
+            atomic_json_update(stock_names_json_path, _upd, timeout=5)
             logging.info(f"✅ 股票名称映射已落盘 {stock_names_json_path}（{len(name_dict)} 只）")
         except Exception as e_json:
             logging.warning("stock_names.json 落盘失败（不影响主流程）: %s", e_json)

@@ -36,6 +36,7 @@ import pandas as pd
 
 # Local modules
 import constants
+from core.file_utils import atomic_json_update
 
 def _p1_scan_min_circ_mv_yi() -> float:
     try:
@@ -62,19 +63,32 @@ def _safe_notify_system_alert(title: str, detail: str, category: str, dedup_key:
 
 try:
     from core.strategies.score_calibration import compute_p1_multi_dim_smooth_score
-except ImportError:
+except ImportError as e:
+    logging.exception("scan_engine 无法导入 compute_p1_multi_dim_smooth_score，P1 初筛将降级为全拒并触发告警: %s", e)
+    _safe_notify_system_alert(
+        title="扫描引擎关键模块缺失",
+        detail=f"compute_p1_multi_dim_smooth_score 导入失败，P1 初筛已降级为全拒。错误: {e}",
+        category="scan_engine_import",
+        dedup_key="scan_engine_import:compute_p1_multi_dim_smooth_score",
+    )
 
     def compute_p1_multi_dim_smooth_score(*args, **kwargs):
-        return 0.0, False, "平滑得分不达标", {}
+        return 0.0, False, "P1评分模块导入失败", {}
 
 
 try:
     from core.strategies.strat_base import strict_golden_burst_ok
 except ImportError as e:
-    logging.warning(f"scan_engine 无法导入 strat_base 门禁: {e}")
+    logging.exception("scan_engine 无法导入 strat_base 门禁，黄金门禁将降级为关闭并触发告警: %s", e)
+    _safe_notify_system_alert(
+        title="扫描引擎门禁模块缺失",
+        detail=f"strict_golden_burst_ok 导入失败，黄金门禁已降级为默认关闭。错误: {e}",
+        category="scan_engine_import",
+        dedup_key="scan_engine_import:strict_golden_burst_ok",
+    )
 
     def strict_golden_burst_ok(df, rt, pool_key=None):
-        return True
+        return False
 
 try:
     from core.indicator_calc import precompute_indicators, merge_daily_with_realtime
@@ -481,7 +495,7 @@ def _extract_scan_surface_metrics(item, rt_map, curr_min, is_after_hours, today_
                 else:
                     elapsed_mins = 240
                 rt_local_vr = min((vol_hand / elapsed_mins) / (ma5_vol_hand / 240), 50.0)
-            # 【V26.6】VWAP均价替代现价计算换手率
+            # 【V26.7】VWAP均价替代现价计算换手率
             rt_amount = _safe_float(rt.get('amount', 0.0))
             if rt_amount > 0 and vol_shares > 0:
                 calc_price = rt_amount / vol_shares
@@ -515,32 +529,25 @@ def _extract_scan_surface_metrics(item, rt_map, curr_min, is_after_hours, today_
 def _add_to_blacklist(ts_code, stock_name, reason):
     blacklist_file = path_blacklist_json()
     today_str = datetime.now(BJ_TZ).strftime("%Y%m%d")
-    blacklist = {}
-    if os.path.exists(blacklist_file):
-        try:
-            with open(blacklist_file, 'r', encoding='utf-8') as f:
-                blacklist = json.load(f)
-        except json.JSONDecodeError as e:
-            logging.warning("黑名单 JSON 解析失败，将覆盖写入新内容 [%s]: %s", blacklist_file, e)
-        except OSError as e:
-            logging.warning("读取黑名单文件 IO 失败 [%s]: %s", blacklist_file, e)
-        except Exception as e:
-            logging.exception("读取黑名单文件失败（未分类）[%s]: %s", blacklist_file, e)
-
-    blacklist[ts_code] = {
-        "name": stock_name,
-        "reason": reason,
-        "kill_date": today_str
-    }
-    
     cutoff_date = (datetime.now(BJ_TZ) - timedelta(days=7)).strftime("%Y%m%d")
-    keys_to_remove = [k for k, v in blacklist.items() if v.get("kill_date", "") < cutoff_date]
-    for k in keys_to_remove: del blacklist[k]
-    
+
+    def _upd(root: dict) -> None:
+        blacklist = root if isinstance(root, dict) else {}
+        blacklist[str(ts_code)] = {
+            "name": stock_name,
+            "reason": reason,
+            "kill_date": today_str,
+        }
+        keys_to_remove = [
+            k for k, v in list(blacklist.items())
+            if not isinstance(v, dict) or str(v.get("kill_date", "")) < cutoff_date
+        ]
+        for k in keys_to_remove:
+            blacklist.pop(k, None)
+
     ensure_runtime_data_layout()
     try:
-        with open(blacklist_file, 'w', encoding='utf-8') as f:
-            json.dump(blacklist, f, ensure_ascii=False)
+        atomic_json_update(blacklist_file, _upd, timeout=5)
     except OSError as e:
         logging.error("写入黑名单失败(IO): %s | %s", blacklist_file, e)
     except Exception as e:
@@ -1146,7 +1153,7 @@ def get_realtime_sector_ranking():
     """
     返回行业 -> 平均涨跌幅 排名字典，按涨跌幅降序。
     
-    【V26.6 性能修复】彻底消除对 fetch_realtime_batch 的全市场 5521 只股票调用：
+    【V26.7 性能修复】彻底消除对 fetch_realtime_batch 的全市场 5521 只股票调用：
     - 方案A（主力）：直接用 DuckDB 中今日已同步的 pct_chg 聚合，0.05s 完成。
       适用场景：日线已收盘 / 已执行过增量同步，数据源是 Tushare 日线数据（含当日收盘 pct_chg）。
       这就是"实时"的真正含义：数据库里的数据就是今天最新同步的结果。
@@ -1181,7 +1188,54 @@ def get_realtime_sector_ranking():
     return {}
 
 
-def _fetch_realtime_sector_ranking_fallback():
+def _load_p1_cache_codes_prefer_runtime_json(today_str: str) -> List[str]:
+    """优先读取 runtime P1 JSON（含 UI_MANUAL 主权），失败时再回退 DuckDB。"""
+    try:
+        from core.runtime_data_paths import path_p1_cache_json
+
+        p1_json = path_p1_cache_json(today_str)
+        if os.path.isfile(p1_json):
+            with open(p1_json, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and isinstance(raw.get("items"), list):
+                rows = raw.get("items") or []
+            elif isinstance(raw, list):
+                rows = raw
+            else:
+                rows = []
+            codes = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get("ts_code") or row.get("code") or row.get("代码") or "").strip()
+                if code:
+                    codes.append(code)
+            if codes:
+                return list(dict.fromkeys(codes))
+    except Exception as e:
+        logging.warning("读取 runtime P1 JSON 失败，将回退 DuckDB p1_cache: %s", e)
+
+    try:
+        p1_cache = load_p1_cache(today_str)
+        if isinstance(p1_cache, list):
+            codes = [
+                str(x.get("ts_code") or x.get("code") or "").strip()
+                for x in p1_cache
+                if isinstance(x, dict)
+            ]
+            codes = [c for c in codes if c]
+            if codes:
+                return list(dict.fromkeys(codes))
+        elif isinstance(p1_cache, dict):
+            codes = [str(k).strip() for k in p1_cache.keys() if str(k).strip()]
+            if codes:
+                return list(dict.fromkeys(codes))
+    except Exception as e:
+        logging.warning("读取 DuckDB p1_cache 失败: %s", e)
+
+    return []
+
+
     """
     带严格 5s 超时保护的实时板块排名抓取（仅作为 DuckDB 无数据时的兜底路径）。
     抓取方式：分批小量抓取（最多 200 只），5s 内未完成则立即返回空 dict。
@@ -1577,12 +1631,7 @@ def capture_intraday_snapshots(codes=None, capture_mode='auto', force=False, slo
             logging.warning(f"读取日内快照失败（未分类）[{snapshot_file}]: {e}")
 
     if not codes:
-        p1_cache = load_p1_cache(today_str)
-        if p1_cache:
-            if isinstance(p1_cache, list):
-                codes = [x.get('ts_code', x.get('code', '')) for x in p1_cache if isinstance(x, dict)]
-            elif isinstance(p1_cache, dict):
-                codes = list(p1_cache.keys())
+        codes = _load_p1_cache_codes_prefer_runtime_json(today_str)
         if not codes:
             codes = list(get_all_basic_industry().keys())
             
@@ -1609,8 +1658,16 @@ def capture_intraday_snapshots(codes=None, capture_mode='auto', force=False, slo
         if need_save:
             ensure_runtime_data_layout()
             try:
-                with open(snapshot_file, 'w', encoding='utf-8') as f:
-                    json.dump({"date": today_str, "stocks": snapshots}, f, ensure_ascii=False)
+                def _upd(root: dict) -> None:
+                    root.clear()
+                    root.update({
+                        "date": today_str,
+                        "updated_at": now_time.isoformat(),
+                        "snapshot_version": 1,
+                        "stocks": snapshots,
+                    })
+
+                atomic_json_update(snapshot_file, _upd, timeout=5)
                 return f"✅ slot {slot} 快照捕获成功（更新 {update_count} 只，{now_time.strftime('%H:%M')}）"
             except Exception as e:
                 return f"保存失败: {e}"
@@ -1684,8 +1741,16 @@ def capture_intraday_snapshots(codes=None, capture_mode='auto', force=False, slo
     if need_save:
         ensure_runtime_data_layout()
         try:
-            with open(snapshot_file, 'w', encoding='utf-8') as f:
-                json.dump({"date": today_str, "stocks": snapshots}, f, ensure_ascii=False)
+            def _upd(root: dict) -> None:
+                root.clear()
+                root.update({
+                    "date": today_str,
+                    "updated_at": now_time.isoformat(),
+                    "snapshot_version": 1,
+                    "stocks": snapshots,
+                })
+
+            atomic_json_update(snapshot_file, _upd, timeout=5)
             return f"✅ {mode} 快照捕获成功（更新 {update_count} 只，{now_time.strftime('%H:%M')}）"
         except Exception as e:
             return f"保存失败: {e}"
@@ -3041,13 +3106,14 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
             if not isinstance(cs_ranks, dict):
                 cs_ranks = neutral_ranks()
             base_info = {
-                "代码": s_code, "名称": stock_name, "行业": f"{industry}({ind_rank_str})", 
-                "股性": size_label, "综合分": 0.0, "涨幅": f"{pct:.2f}%", 
-                "量比": f"{min(_vr_show, 50.0):.1f}({vol_ratio_tag})", "建议仓位": "", "纪律防线": "",  
-                "真换手": f"{_trf_disp:.1f}%", "集中度": cyq_str, 
+                "代码": s_code, "名称": stock_name, "行业": f"{industry}({ind_rank_str})",
+                "股性": size_label, "综合分": 0.0, "涨幅": f"{pct:.2f}%",
+                "量比": f"{min(_vr_show, 50.0):.1f}({vol_ratio_tag})", "建议仓位": "", "纪律防线": "",
+                "真换手": f"{_trf_disp:.1f}%", "集中度": cyq_str,
                 global_hk_label: _hk_wan_str,
-                "现价": f"{now_price:.2f}", "战法": "", "连板高度": f"{limit_times_val:.0f}", 
-                "机构预测": f"{int(_safe_float(rt.get('forecast_type', 0), 0))}"
+                "现价": f"{now_price:.2f}", "战法": "", "连板高度": f"{limit_times_val:.0f}",
+                "机构预测": f"{int(_safe_float(rt.get('forecast_type', 0), 0))}",
+                "turnover_rate_f": round(_trf_disp, 4),
             }
 
             scan_vwap_fish = False
@@ -3394,7 +3460,7 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                                     _pt = str(b.get("操盘提示", "") or "").strip()
                                     _add = "P3右侧确认"
                                     b["操盘提示"] = f"{_pt} | {_add}" if _pt and _pt != "--" else _add
-                        # 【V26.7 增强】P3 告警补充四项关键数据：VWAP偏离、均线位置、主力净额、MACD状态
+                        # 【V26.7 增强】P3 告警补充五项关键数据：VWAP偏离、均线位置、主力净额、MACD状态、上影率
                         if pool_key == "p3":
                             # 1) VWAP 偏离
                             _vw = _safe_float(rt.get("vwap"), 0.0)
@@ -3421,6 +3487,163 @@ def run_scan_engine(target_pools, base_items, regime="震荡市", progress_callb
                                 for _mkey in ("macd_dif", "macd_dea", "macd_bar"):
                                     if _mkey in _curr and not pd.isna(_curr[_mkey]):
                                         b[_mkey] = round(float(_curr[_mkey]), 4)
+                            # 5) 上影率（已在 crowding penalty 计算时算出，直接复用）
+                            if upper_shadow_pct_live > 0:
+                                b["upper_shadow_ratio"] = round(upper_shadow_pct_live, 2)
+                            # 6) DDE 主力净流入（东方财富实时接口，有则用，无则回退到日线净额）
+                            _dde_main_net = _safe_float(rt.get("dde_main_net"), 0.0)
+                            _dde_main_rate = _safe_float(rt.get("dde_main_rate"), 0.0)
+                            # 回退路径用 rt['amount'](元) 换算为万元，保持与 dde_main_net(万元) 量纲一致
+                            _amount_rt_yuan = _safe_float(rt.get("amount", 0.0), 0.0)
+                            _amount_wan = _amount_rt_yuan / 10000.0
+                            if _dde_main_net != 0.0:
+                                b["main_net_amount"] = round(_dde_main_net, 2)
+                                b["realtime_main_inflow_rate"] = round(_dde_main_rate, 2)
+                            elif _net_main != 0.0:
+                                b["main_net_amount"] = round(_net_main / 10000.0, 2)
+                                if _amount_rt_yuan > 0:
+                                    # _net_main 和 _amount_rt_yuan 都是元，直接除再乘100得到百分比
+                                    b["realtime_main_inflow_rate"] = round(_net_main / _amount_rt_yuan * 100.0, 2)
+                            # 7) 入池理由（从战法结果或命中战法推导）
+                            if isinstance(hit_res, dict):
+                                _er = str(hit_res.get("detail", {}).get("入池理由", "") or "").strip()
+                                if not _er and isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                    _er = "命中战法: " + " / ".join(hit_res["strategies"][:2])
+                                if _er:
+                                    b["entry_reason"] = _er
+                            # 8) 战法名称
+                            if isinstance(hit_res, dict) and isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                _tn = hit_res["strategies"][0]
+                                if "tactic_name" not in b:
+                                    b["tactic_name"] = _tn
+                        # 【V26.7 增强】P4 补充尾盘关键数据：VWAP偏离、均线偏离、主力净额、DDE实时
+                        if pool_key == "p4":
+                            # 1) VWAP偏离
+                            _vw = _safe_float(rt.get("vwap"), 0.0)
+                            _now_p = _safe_float(rt.get("price"), 0.0)
+                            if _vw > 0 and _now_p > 0:
+                                _vw_dev = (_now_p - _vw) / _vw * 100.0
+                                b["vwap_dev_pct"] = round(_vw_dev, 2)
+                                b["vwap"] = round(_vw, 3)
+                                b["price_vs_vwap_pct"] = round(_vw_dev, 2)
+                                b["realtime_above_vwap"] = bool(_now_p >= _vw)
+                            # 2) 均线偏离（从 df_target 读取）
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _ma in ("ma5", "ma10", "ma20", "ma60"):
+                                    if _ma in _curr and not pd.isna(_curr[_ma]):
+                                        _px_vs_ma = (_now_p - float(_curr[_ma])) / max(float(_curr[_ma]), 1e-9) * 100.0
+                                        b[f"{_ma}_dev_pct"] = round(_px_vs_ma, 2)
+                                        b[_ma] = round(float(_curr[_ma]), 3)
+                            # 3) 主力净额（东方财富DDE优先，日线净额兜底）
+                            _dde_main_net = _safe_float(rt.get("dde_main_net"), 0.0)
+                            _dde_main_rate = _safe_float(rt.get("dde_main_rate"), 0.0)
+                            _net_main = _safe_float(rt.get("net_main_amount", hist.get("net_main_amount", 0.0)), 0.0)
+                            if _dde_main_net != 0.0:
+                                b["main_net_amount"] = round(_dde_main_net, 2)
+                                b["realtime_main_inflow_rate"] = round(_dde_main_rate, 2)
+                            elif _net_main != 0.0:
+                                b["main_net_amount"] = round(_net_main / 10000.0, 2)
+                                _amount_yuan = _safe_float(rt.get("amount", 0.0), 0.0)
+                                if _amount_yuan > 0:
+                                    b["realtime_main_inflow_rate"] = round(_net_main / _amount_yuan * 100.0, 2)
+                            # 4) MACD状态（从 df_target 读取）
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _mkey in ("macd_dif", "macd_dea", "macd_bar"):
+                                    if _mkey in _curr and not pd.isna(_curr[_mkey]):
+                                        b[_mkey] = round(float(_curr[_mkey]), 4)
+                            # 5) 上影率（复用在 crowding penalty 中算出的值）
+                            if upper_shadow_pct_live > 0:
+                                b["upper_shadow_ratio"] = round(upper_shadow_pct_live, 2)
+                            # 6) 入池理由（从战法结果推导）
+                            if isinstance(hit_res, dict):
+                                _er = str(hit_res.get("detail", {}).get("入池理由", "") or "").strip()
+                                if not _er and isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                    _er = "命中战法: " + " / ".join(hit_res["strategies"][:2])
+                                if _er:
+                                    b["entry_reason"] = _er
+                            # 7) 战法名称
+                            if isinstance(hit_res, dict) and isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                _tn = hit_res["strategies"][0]
+                                if "tactic_name" not in b:
+                                    b["tactic_name"] = _tn
+                        # 【V26.7 增强】P5 补充盘后关键数据：VWAP偏离、均线偏离、主力净额、DDE实时
+                        if pool_key == "p5":
+                            # 1) VWAP偏离（从 rt 和 df_target 综合计算）
+                            _vw = _safe_float(rt.get("vwap"), 0.0)
+                            _now_p = _safe_float(rt.get("price"), 0.0)
+                            if _vw > 0 and _now_p > 0:
+                                _vw_dev = (_now_p - _vw) / _vw * 100.0
+                                b["vwap_dev_pct"] = round(_vw_dev, 2)
+                                b["vwap"] = round(_vw, 3)
+                                b["price_vs_vwap_pct"] = round(_vw_dev, 2)
+                                b["realtime_above_vwap"] = bool(_now_p >= _vw)
+                            # 2) 均线偏离（从 df_target 读取）
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _ma in ("ma5", "ma10", "ma20", "ma60"):
+                                    if _ma in _curr and not pd.isna(_curr[_ma]):
+                                        _px_vs_ma = (_now_p - float(_curr[_ma])) / max(float(_curr[_ma]), 1e-9) * 100.0
+                                        b[f"{_ma}_dev_pct"] = round(_px_vs_ma, 2)
+                                        b[_ma] = round(float(_curr[_ma]), 3)
+                            # 3) 主力净额（东方财富DDE优先，日线净额兜底）
+                            _dde_main_net = _safe_float(rt.get("dde_main_net"), 0.0)
+                            _dde_main_rate = _safe_float(rt.get("dde_main_rate"), 0.0)
+                            _net_main = _safe_float(rt.get("net_main_amount", hist.get("net_main_amount", 0.0)), 0.0)
+                            if _dde_main_net != 0.0:
+                                b["main_net_amount"] = round(_dde_main_net, 2)
+                                b["realtime_main_inflow_rate"] = round(_dde_main_rate, 2)
+                            elif _net_main != 0.0:
+                                b["main_net_amount"] = round(_net_main / 10000.0, 2)
+                                _amount_yuan = _safe_float(rt.get("amount", 0.0), 0.0)
+                                if _amount_yuan > 0:
+                                    b["realtime_main_inflow_rate"] = round(_net_main / _amount_yuan * 100.0, 2)
+                            # 4) MACD状态（从 df_target 读取）
+                            if df_target is not None and len(df_target) > 0:
+                                _curr = df_target.iloc[-1]
+                                for _mkey in ("macd_dif", "macd_dea", "macd_bar"):
+                                    if _mkey in _curr and not pd.isna(_curr[_mkey]):
+                                        b[_mkey] = round(float(_curr[_mkey]), 4)
+                            # 5) P5特有：量比分（从 hit_res.detail 提取）
+                            if isinstance(hit_res, dict):
+                                _detail = hit_res.get("detail", {})
+                                _vr_s = _safe_float(_detail.get("量比位置化分(相对市场)", 0.0), 0.0)
+                                if _vr_s > 0:
+                                    b["vol_ratio_score"] = round(_vr_s, 2)
+                                _vwap_penalty = _safe_float(_detail.get("VWAP惩罚乘子", 1.0), 1.0)
+                                if _vwap_penalty != 1.0:
+                                    b["vwap_penalty_mult"] = round(_vwap_penalty, 3)
+                                _hit_dim = _safe_float(_detail.get("命中维度数", 0.0), 0.0)
+                                if _hit_dim > 0:
+                                    b["hit_dimension_count"] = round(_hit_dim, 0)
+                                _ma_bias = _safe_float(_detail.get("MA动能_bias_ma5_ma20_pct"), None)
+                                if _ma_bias is not None:
+                                    # 转换为0-100分：bias在±10%内为正常，<-10%空头，>+5%多头
+                                    _ma_score = max(0.0, min(100.0, 50.0 + _ma_bias * 5.0))
+                                    b["ma_momentum_score"] = round(_ma_score, 2)
+                                _er = str(_detail.get("买入原因", "") or "").strip()
+                                if not _er:
+                                    _er = str(_detail.get("入池理由", "") or "").strip()
+                                if not _er:
+                                    _er = str(hit_res.get("market_status", "") or "").strip()
+                                if not _er and isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                    _er = "命中战法: " + " / ".join(hit_res["strategies"][:2])
+                                if _er:
+                                    b["entry_reason"] = _er
+                                # 战法名称
+                                if isinstance(hit_res.get("strategies"), list) and hit_res["strategies"]:
+                                    _tn = hit_res["strategies"][0]
+                                    if "tactic_name" not in b:
+                                        b["tactic_name"] = _tn
+                                # 市场状态
+                                _mstatus = str(_detail.get("市场状态", "") or hit_res.get("market_status", "") or "").strip()
+                                if _mstatus and _mstatus != "--":
+                                    b["regime_state"] = _mstatus
+                                # 风险等级
+                                _rl = str(_detail.get("风险等级", "") or hit_res.get("risk_level", "") or "").strip()
+                                if _rl and _rl != "--":
+                                    b["risk_level"] = _rl
                         b["拥挤度"] = f"{crowd_score:.0f}({crowd_label})"
                         if crowd_mult < 1.0:
                             _tag_c = str(b.get("风险标签", "") or "").strip()

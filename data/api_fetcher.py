@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.6 - 高并发异步行情中枢（仅实时快照，不承担历史全量下载）
+小杰AI选股系统 Pro V26.7 - 高并发异步行情中枢（仅实时快照，不承担历史全量下载）
 
-【V26.6 瀑布式数据源战略 — 基于交易日实测结果】
+【V26.7 瀑布式数据源战略 — 基于交易日实测结果】
 
 实测数据（2026-05-26 周二，14只股票池）:
-  东财 (push2.eastmoney.com):  0%  → 服务器不稳定，移除
   腾讯 (qt.gtimg.cn):           100% → 字段最全（price/pre_close/open/high/low/vol/amount/vol_ratio/turnover_rate_f/limit_up/limit_down/amplitude_pct）
   新浪 (hq.sinajs.cn):         100% → 仅基础字段，缺6个关键字段
+  东方财富 (push2.eastmoney.com): → DDE 实时资金流（主力净流入/占比），独立第3.5层
 
 瀑布策略（顺序执行，任意步骤足够好即返回）:
   1. 腾讯主力   → 覆盖主力全字段，含腾讯独有 vol_ratio/turnover_rate_f/limit_up/limit_down/amplitude_pct
   2. 新浪备用   → 补充腾讯失败的标的（基础行情）
   3. Tushare    → 补充 PE_TTM / PB / circ_mv（历史日线，盘中有旧数据可用）
+  3.5. 东方财富DDE → 盘中主力净流入(万元) / 主力净流入占比(%)，覆盖 realtime_main_inflow_rate
   4. 推算补全   → pct_chg = (price - pre_close) / pre_close * 100，涨跌停从 pre_close 推算
 
 【性能】单源并行 50 只/批，单次请求 5s 超时，任意源失败即用下一源补充，绝不卡死。
-【安全】移除东财/腾讯/新浪三源同步请求，避免第三方限流。
 """
 # __file__ aware path setup so `python api_fetcher.py` can self-test
 import sys as _sys, os as _os
@@ -28,6 +28,7 @@ if _os.path.dirname(_SELF_DIR) not in _sys.path:
 
 # Standard library
 import asyncio
+import json
 import logging
 import os
 import random
@@ -116,11 +117,65 @@ _SINA_HEADERS = {
     "Referer": "https://finance.sina.com.cn/",
     "Accept": "*/*",
 }
+_EMONEY_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://data.eastmoney.com/",
+    "Accept": "*/*",
+}
 
 
 # ──────────────────────────────────────────────
 # 数据源抓取函数（各源独立，互不依赖）
 # ──────────────────────────────────────────────
+
+async def _fetch_eastmoney_dde_chunk(session, chunk, semaphore) -> Dict:
+    """
+    东方财富实时 DDE 资金流接口 — 获取盘中主力/大单净流入与占比。
+    接口: push2.eastmoney.com/api/qt/stock/fflow/daykline/get
+    字段: f62=主力净流入额(元), f184=超大单净流入, f66=大单净流入,
+          f69=中单净流入, f72=小单净流入, f58=股票名称
+    返回: {code: {dde_main_net(万元), dde_main_rate(%)} }
+    """
+    result = {}
+    for code in chunk:
+        code6 = str(code).split(".")[0][:6]
+        # secid: 沪市=1.6xxxxx, 深市=0.0/0/3/4xxxxx
+        if code6.startswith("6"):
+            secid = f"1.{code6}"
+        elif code6.startswith(("0", "3")):
+            secid = f"0.{code6}"
+        else:
+            continue
+        url = (
+            "http://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
+            f"?lmt=0&klt=1&secid={secid}"
+            f"&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63"
+        )
+        try:
+            text = await _http_get_text(session, url, semaphore, encoding="utf-8", headers=_EMONEY_HEADERS)
+            if text is None:
+                continue
+            data = json.loads(text)
+            klines = (data.get("data") or {}).get("klines") or []
+            if not klines:
+                continue
+            # 取最后一根（当日最新累计）
+            last = klines[-1].split(",")
+            if len(last) < 7:
+                continue
+            # f51=时间, f52=主力净流入, f53=小单, f54=中单, f55=大单, f56=超大单
+            main_net_yuan = _safe_float(last[1], 0.0)   # 元
+            amount_yuan = _safe_float(last[6], 0.0)      # 成交额(元)，f63
+            if main_net_yuan == 0.0 and amount_yuan == 0.0:
+                continue
+            result[code6] = {
+                "dde_main_net": round(main_net_yuan / 10000.0, 2),   # 万元
+                "dde_main_rate": round(main_net_yuan / max(amount_yuan, 1) * 100.0, 2) if amount_yuan > 0 else 0.0,
+            }
+        except Exception:
+            pass
+    return result
+
 
 async def _fetch_tencent_chunk(session, chunk, semaphore) -> Dict:
     """
@@ -218,7 +273,7 @@ async def _fetch_sina_chunk(session, chunk, semaphore) -> Dict:
 
 async def _fetch_realtime_batch_async(codes: List[str]) -> Dict[str, Dict]:
     """
-    【V26.6 瀑布式数据源 — 基于交易日实测】
+        【V26.7 瀑布式数据源战略 — 基于交易日实测结果】
 
     执行顺序（任意步骤成功即可能提前返回）：
     1. 腾讯主力 → 全部 14 个字段（主力）
@@ -246,12 +301,6 @@ async def _fetch_realtime_batch_async(codes: List[str]) -> Dict[str, Dict]:
             if isinstance(res, dict):
                 rt_map.update(res)
 
-    # 腾讯已命中全部目标，直接走补充流程（无需新浪备用）
-    if len(rt_map) >= len(clean) * 0.5:  # 腾讯命中率 ≥ 50% 就够用
-        await _fill_tushare_supplemental_fields(rt_map, clean)
-        _compute_derived_fields(rt_map)
-        return rt_map
-
     # ── 第 2 层：新浪备用（腾讯命中率低，用新浪补漏）───
     sina_map: Dict[str, Dict] = {}
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -269,9 +318,24 @@ async def _fetch_realtime_batch_async(codes: List[str]) -> Dict[str, Dict]:
     # ── 第 3 层：Tushare 补充财务字段 ─────────────────
     await _fill_tushare_supplemental_fields(rt_map, clean)
 
+    # ── 第 3.5 层：东方财富 DDE 实时资金流（盘中主力净流入）────
+    # 【V26.7 修复】必须在两条路径（腾讯≥50% 和 <50%）都执行
+    dde_map: Dict[str, Dict] = {}
+    dde_chunks = [clean[i : i + 30] for i in range(0, len(clean), 30)]
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS, ssl=False)) as session:
+        sem2 = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        tasks2 = [_fetch_eastmoney_dde_chunk(session, ch, sem2) for ch in dde_chunks]
+        dde_results = await asyncio.gather(*tasks2, return_exceptions=True)
+        for res in dde_results:
+            if isinstance(res, dict):
+                dde_map.update(res)
+    for code6, dde_data in dde_map.items():
+        if code6 in rt_map:
+            rt_map[code6]["dde_main_net"] = dde_data.get("dde_main_net")
+            rt_map[code6]["dde_main_rate"] = dde_data.get("dde_main_rate")
+
     # ── 第 4 层：推算派生字段 ──────────────────────────
     _compute_derived_fields(rt_map)
-
     return rt_map
 
 

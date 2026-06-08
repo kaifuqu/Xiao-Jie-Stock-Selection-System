@@ -32,8 +32,11 @@ def attach_script_run_ctx(thread: threading.Thread) -> threading.Thread:
         from streamlit.runtime.scriptrunner import add_script_run_ctx
 
         add_script_run_ctx(thread)
-    except Exception:
-        pass
+    except ImportError:
+        return thread
+    except Exception as e:
+        # 保守降级：上下文注入失败不阻断 UI，但保留调试线索，避免完全静默。
+        _ = e
     return thread
 
 

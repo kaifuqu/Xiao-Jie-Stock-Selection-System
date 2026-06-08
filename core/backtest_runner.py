@@ -48,7 +48,7 @@ try:
     from core.strategies.strat_p5_postmarket import P5Postmarket
     from core.strategies.strat_golden_10 import GoldenTenStrategies
 except ImportError as e:
-    logging.error(f"⚠️ 战法引擎缺失: {e}。请确保 strategies 目录下文件完整。")
+    logging.exception("backtest_runner 战法引擎导入失败，已降级为 DummyEngine: %s", e)
     class DummyEngine:
         def run_all(self, df, rt): return []
         def evaluate(self, df, rt, *args, **kwargs): return [], 0.0, 0.0

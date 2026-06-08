@@ -17,6 +17,63 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 
 BJ_TZ = timezone(timedelta(hours=8))
 
+
+def _load_p1_codes_from_runtime_json_or_db(load_p1_cache_func=None) -> list[str]:
+    """优先读取 runtime P1 JSON，失败或为空时回退 DuckDB p1_cache。"""
+    try:
+        from core.runtime_data_paths import path_p1_cache_json, POOL_CACHE_DIR
+    except Exception as e:
+        logging.warning("读取 P1 路径工具失败: %s", e)
+        return []
+
+    today = datetime.now(BJ_TZ).strftime("%Y%m%d")
+    candidates = [path_p1_cache_json(today)]
+    try:
+        if os.path.isdir(POOL_CACHE_DIR):
+            for name in sorted(os.listdir(POOL_CACHE_DIR), reverse=True):
+                if name.startswith("p1_cache_") and name.endswith(".json"):
+                    fp = os.path.join(POOL_CACHE_DIR, name)
+                    if fp not in candidates:
+                        candidates.append(fp)
+    except Exception as e:
+        logging.debug("枚举 P1 runtime 缓存失败: %s", e)
+
+    for p in candidates:
+        try:
+            if not os.path.exists(p):
+                continue
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rows = data if isinstance(data, list) else (data.get("items") or data.get("rows") or data.get("stocks") or [])
+            out: list[str] = []
+            for it in rows:
+                if not isinstance(it, dict):
+                    continue
+                code = str(it.get("ts_code") or it.get("code") or it.get("代码") or "").strip()
+                if code:
+                    out.append(code)
+            out = [c for c in dict.fromkeys(out) if c]
+            if out:
+                return out
+        except Exception as e:
+            logging.warning("读取 P1 runtime JSON 失败 %s: %s", p, e)
+
+    if load_p1_cache_func is None:
+        return []
+    try:
+        p1_cache = load_p1_cache_func(today)
+        if isinstance(p1_cache, list):
+            codes = [str(x.get("ts_code") or x.get("code") or "").strip() for x in p1_cache if isinstance(x, dict)]
+        elif isinstance(p1_cache, dict):
+            codes = [str(k).strip() for k in p1_cache.keys()]
+        else:
+            codes = []
+        return [c for c in dict.fromkeys(codes) if c]
+    except Exception as e:
+        logging.warning("读取 DuckDB p1_cache 失败: %s", e)
+        return []
+
+
 # (时, 分, slot_id) — 与 capture_intraday_snapshots(slot_id=...) 一致
 _INTRADAY_SNAPSHOT_SLOTS: tuple[tuple[int, int, str], ...] = (
     (9, 35, "935"),
@@ -72,42 +129,7 @@ def _next_fire_after(now: datetime) -> tuple[datetime, int, int, str]:
 
 def _load_p1_bottom_pool_codes() -> list[str]:
     """读取 P1 底仓池代码列表，供后台 3 分钟复核使用。"""
-    try:
-        from core.runtime_data_paths import path_p1_cache_json, POOL_CACHE_DIR
-    except Exception:
-        return []
-    try:
-        today = datetime.now(BJ_TZ).strftime("%Y%m%d")
-        candidates = [path_p1_cache_json(today)]
-        try:
-            if os.path.isdir(POOL_CACHE_DIR):
-                for name in sorted(os.listdir(POOL_CACHE_DIR), reverse=True):
-                    if name.startswith("p1_cache_") and name.endswith(".json"):
-                        fp = os.path.join(POOL_CACHE_DIR, name)
-                        if fp not in candidates:
-                            candidates.append(fp)
-        except Exception:
-            pass
-
-        for p in candidates:
-            if not os.path.exists(p):
-                continue
-            with open(p, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            rows = data if isinstance(data, list) else (data.get("items") or data.get("rows") or data.get("stocks") or [])
-            out: list[str] = []
-            for it in rows:
-                if not isinstance(it, dict):
-                    continue
-                code = str(it.get("ts_code") or it.get("code") or it.get("代码") or "").strip()
-                if code:
-                    out.append(code)
-            if out:
-                return out
-        return []
-    except Exception as e:
-        logging.debug("读取 P1 底仓池失败: %s", e)
-        return []
+    return _load_p1_codes_from_runtime_json_or_db()
 
 
 def _run_p1_bottom_hold_recheck() -> str:
@@ -117,17 +139,7 @@ def _run_p1_bottom_hold_recheck() -> str:
     except Exception as e:
         return f"P1复核入口导入失败: {e}"
 
-    codes = _load_p1_bottom_pool_codes()
-    if not codes:
-        try:
-            today = datetime.now(BJ_TZ).strftime("%Y%m%d")
-            p1_cache = load_p1_cache(today)
-            if isinstance(p1_cache, list):
-                codes = [str(x.get("ts_code") or x.get("code") or "").strip() for x in p1_cache if isinstance(x, dict)]
-            elif isinstance(p1_cache, dict):
-                codes = [str(k).strip() for k in p1_cache.keys()]
-        except Exception:
-            codes = []
+    codes = _load_p1_codes_from_runtime_json_or_db(load_p1_cache)
     codes = [c for c in dict.fromkeys(codes) if c]
     if not codes:
         return "P1底仓池为空"
