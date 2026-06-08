@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小杰AI选股系统 Pro V26.6 - 全局常量与阈值控制中心
+小杰AI选股系统 Pro V26.7 - 全局常量与阈值控制中心
 所有硬编码参数集中于此；版本号与全项目审查基线保持一致。
 
 【V26 数据底座】capital_resonance_score 算法见 data/capital_resonance_features.py

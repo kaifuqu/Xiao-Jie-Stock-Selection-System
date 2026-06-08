@@ -1065,13 +1065,17 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
 
 
 def table_exists(table_name):
-    """判断表是否存在；异常时返回 False，避免上层崩溃。"""
+    """
+    判断表是否存在；异常时返回 False，避免上层崩溃。
+
+    【V26.8 修复】使用独立的临时连接而非 get_read_conn_singleton()，
+    避免被 _close_all_readonly_conns() 意外关闭其他函数仍在使用的连接。
+    """
     if not os.path.exists(db_path):
         return False
+    con = None
     try:
-        con = get_read_conn_singleton(max_wait_sec=35.0)
-        if con is None:
-            return False
+        con = duckdb.connect(db_path, read_only=True)
         df = con.execute("SHOW TABLES").fetchdf()
         if df is not None and not df.empty and 'name' in df.columns:
             return table_name in df['name'].astype(str).values
@@ -1083,6 +1087,12 @@ def table_exists(table_name):
     except Exception as e:
         logging.debug(f"table_exists 查询失败 [{table_name}]: {e}")
         return False
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 
 def duckdb_resolve_table_sql_id(con, table_name: str) -> str:
