@@ -527,12 +527,15 @@ def _register_readonly_conn(con):
 
 def _close_all_readonly_conns():
     """
-    关闭所有追踪的只读连接。
+    关闭所有追踪的短生命周期只读连接。
 
     用于解决 "different configuration" 错误：
     当需要创建写连接时，先调用此函数关闭所有只读连接。
+
+    注意：_read_con 由 get_read_conn_singleton 独立管理（不在此追踪列表中），
+    其关闭和置 None 逻辑在 get_conn() 中处理，两者互不干扰。
     """
-    global _readonly_conns, _read_con
+    global _readonly_conns
     # 关闭所有追踪的只读连接
     for con in _readonly_conns:
         try:
@@ -540,13 +543,8 @@ def _close_all_readonly_conns():
         except Exception:
             pass
     _readonly_conns = []
-    # 关闭全局只读连接
-    if _read_con is not None:
-        try:
-            _read_con.close()
-        except Exception:
-            pass
-        _read_con = None
+    # _read_con 由 get_read_conn_singleton 独立管理，不在此处关闭
+    # 避免与仍在使用该连接的 get_read_conn() 调用方冲突
 
 
 def _duckdb_connect_write():
@@ -1027,6 +1025,7 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
     - read_only=False 时保留短连接语义，finally 中强制 close。
     """
     con = None
+    _con_needs_close = False
     try:
         if read_only:
             con = get_read_conn_singleton(max_wait_sec=max_wait_sec)
@@ -1043,6 +1042,7 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
                 yield _write_con
                 return
             con = _duckdb_connect_readonly()
+            _con_needs_close = True
             yield con
             return
         if not os.path.exists(db_path):
@@ -1050,13 +1050,14 @@ def get_read_conn(read_only: bool = True, *, max_wait_sec: float = 0.0):
                 yield wc
             return
         con = _duckdb_connect_write()
+        _con_needs_close = True
         yield con
     finally:
         # 【V26.8 关键修复】绝对不能关闭单例写连接 _write_con！
         # 当 get_read_conn_singleton() 内部检测到 _write_con 已建立时，
         # 会直接返回 _write_con（该连接由 get_conn() 的单例生命周期管理）。
         # 若在 finally 中关闭，将导致同进程所有后续数据库操作遇到 "Connection already closed"。
-        if con is not None and con is not _write_con:
+        if con is not None and con is not _write_con and _con_needs_close:
             try:
                 con.close()
             except Exception:
